@@ -8,8 +8,6 @@ An intelligent command-line expense tracking application powered by GPT-4. This 
 - 📊 Automatic expense categorization
 - 💡 Smart category suggestions
 - 📅 Flexible date handling
-- 🔄 Interactive proposal review system
-- 📝 Detailed expense logging
 
 ## Prerequisites
 
