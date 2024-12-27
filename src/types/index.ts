@@ -1,19 +1,33 @@
+import type { StateManager } from "../core/StateManager";
+import type { ActionQueue } from "../core/ActionQueue";
+
+// Base state interfaces
 export interface AgentState {
   messages: Message[];
   context: ExpenseContext;
-  currentStep: string;
+  currentStep: AgentStep;
   toolCalls: ToolCall[];
+  actionContext: ActionContext;
 }
 
+export type AgentStep =
+  | "initial"
+  | "understanding"
+  | "thinking"
+  | "acting"
+  | "complete";
+
+// Message types
 export interface Message {
-  role: "user" | "assistant" | "system";
+  role: "system" | "user" | "assistant";
   content: string;
 }
 
-export interface ToolCall {
-  name: string;
-  arguments: Record<string, any>;
-  result?: any;
+// Context types
+export interface ExpenseContext {
+  timeContext?: TimeContext;
+  understanding?: UnderstandingContext;
+  [key: string]: any;
 }
 
 export interface TimeContext {
@@ -22,71 +36,142 @@ export interface TimeContext {
   timeZone: string;
 }
 
-export interface ExpenseContext {
-  timeContext?: TimeContext;
-  timeframe?: {
-    start: Date;
-    end: Date;
-  };
-  category?: string;
-  currentTotal?: number;
-  budgetLimit?: number;
-  recentExpenses?: Expense[];
-  intent?:
-    | "add_expense"
-    | "get_insights"
-    | "categorize"
-    | "search"
-    | "question";
-  amount?: number;
-  description?: string;
-  date?: Date;
+export interface UnderstandingContext {
+  needsClarification?: boolean;
+  clarificationReason?: string;
+  [key: string]: any;
 }
 
-export interface Expense {
+// Action handling
+export interface ActionContext {
+  proposals: ActionProposal[];
+  currentInput: string;
+  isProcessing: boolean;
+  currentProposal?: string | null;
+  proposalHistory?: Array<{
+    originalState: string;
+    currentState: string;
+    transitions: string[];
+  }>;
+}
+
+export interface ActionProposal {
   id: string;
-  amount: number;
-  description: string;
-  category_id: string;
-  date: Date;
-  date_created: Date;
+  action: string;
+  parameters: ActionParameters;
+  confidence: number;
+  context: string;
+  followUp: string[];
+  status: ProposalStatus;
+  originalText: string;
+}
+
+export type ProposalStatus = "pending" | "accepted" | "rejected" | "modified";
+
+export interface ActionParameters {
+  amount?: number;
+  description?: string;
+  date?: string;
+  category_id?: string;
   merchant?: string;
   tags?: string[];
   metadata?: Record<string, any>;
+  [key: string]: any;
 }
 
-export interface Category {
-  id: string;
+// Tool calls
+export type ToolCallStatus = "success" | "failed" | "pending";
+
+export interface ToolCall {
   name: string;
-  description: string;
+  arguments: Record<string, any>;
+  result?: any;
+  status?: ToolCallStatus;
+  error?: string;
+  executedAt?: string;
 }
 
-export interface Budget {
-  id: string;
-  category_id: string;
+// Event types
+export interface StateEvents {
+  stateChanged: (state: AgentState) => void;
+  stateReset: () => void;
+}
+
+export interface QueueEvents {
+  proposalAdded: (proposal: ActionProposal) => void;
+  proposalUpdated: (proposal: ActionProposal) => void;
+  proposalRemoved: (id: string) => void;
+  queueCleared: () => void;
+}
+
+// Error handling
+export interface AgentError extends Error {
+  code: string;
+  details?: Record<string, any>;
+}
+
+// State Manager type guards
+export function isValidState(state: any): state is AgentState {
+  return (
+    state &&
+    Array.isArray(state.messages) &&
+    typeof state.context === "object" &&
+    typeof state.currentStep === "string" &&
+    Array.isArray(state.toolCalls) &&
+    typeof state.actionContext === "object"
+  );
+}
+
+export function isValidProposal(proposal: any): proposal is ActionProposal {
+  return (
+    proposal &&
+    typeof proposal.id === "string" &&
+    typeof proposal.action === "string" &&
+    typeof proposal.parameters === "object" &&
+    typeof proposal.confidence === "number" &&
+    typeof proposal.context === "string" &&
+    Array.isArray(proposal.followUp) &&
+    typeof proposal.status === "string" &&
+    typeof proposal.originalText === "string"
+  );
+}
+
+// Utility types
+export type StateUpdater = (state: AgentState) => Partial<AgentState>;
+export type ProposalHandler = (proposal: ActionProposal) => Promise<void>;
+
+// Component props types
+export interface StateAwareProps {
+  stateManager: StateManager;
+}
+
+export interface QueueAwareProps {
+  actionQueue: ActionQueue;
+}
+
+export interface AddExpenseParams extends ActionParameters {
   amount: number;
-  period: "daily" | "weekly" | "monthly" | "yearly";
-  start_date: Date;
-  end_date?: Date;
+  description: string;
+  date?: string;
+  category?: string;
 }
 
-export interface UnderstandingContext extends Omit<ExpenseContext, "date"> {
-  intent:
-    | "add_expense"
-    | "get_insights"
-    | "categorize"
-    | "search"
-    | "question"
-    | "need_clarification"
-    | "confirm_category";
-  amount?: number;
-  description?: string;
-  date?: Date;
-  relativeDays?: number;
-  timeContext: TimeContext;
-  suggestedCategory?: {
-    name: string;
-    confidence: number;
-    isNew: boolean;
-  };
+export interface GetInsightsParams {
+  timeframe: string;
 }
+
+export interface GetSimilarExpensesParams {
+  description: string;
+  limit?: number;
+}
+
+export interface CategorizeExpenseParams {
+  description: string;
+  amount: number;
+}
+
+export type ToolParameters =
+  | AddExpenseParams
+  | GetInsightsParams
+  | GetSimilarExpensesParams
+  | CategorizeExpenseParams;

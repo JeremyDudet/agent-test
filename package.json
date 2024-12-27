@@ -8,7 +8,8 @@
     "build": "bun build ./src/index.ts --outdir ./dist"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/uuid": "^10.0.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -19,9 +20,11 @@
     "@langchain/langgraph": "^0.2.36",
     "@langchain/openai": "^0.3.16",
     "@supabase/supabase-js": "^2.47.10",
+    "chalk": "^5.4.1",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
     "dotenv": "^16.4.7",
-    "openai": "^4.77.0"
+    "openai": "^4.77.0",
+    "uuid": "^11.0.3"
   }
 }
