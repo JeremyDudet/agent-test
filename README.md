@@ -1,6 +1,6 @@
 # AI-Powered Expense Tracker
 
-An intelligent command-line expense tracking application powered by GPT-4. This application understands natural language inputs to help you track expenses, categorize spending, and gain insights into your financial habits.
+An intelligent command-line expense tracking application that uses GPT-4 to detect expenses from your natural language input. As you type, the agent identifies potential expenses and builds a queue of proposals for you to review and approve before they're added to your database.
 
 ## Features
 
