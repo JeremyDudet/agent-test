@@ -1,6 +1,14 @@
 # AI-Powered Expense Tracker
 
-An intelligent command-line expense tracking application that uses GPT-4 to detect expenses from your natural language input. As you type, the agent identifies potential expenses and builds a queue of proposals for you to review and approve before they're added to your database.
+This project demonstrates the implementation of multi-agent workflows using LangGraph, with an expense tracking use case. 
+
+The application is an multi-agnt workflow that:
+
+Processes natural language inputs to detect and categorize expenses
+Handles relative date references (e.g., "yesterday", "last week")
+Maintains conversation context for fluid interactions
+
+The current CLI implementation serves as a prototype for future expansions
 
 ## Features
 
