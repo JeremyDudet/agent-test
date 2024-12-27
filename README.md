@@ -20,8 +20,8 @@ An intelligent command-line expense tracking application powered by GPT-4. This 
 1. Clone the repository
 
    ```bash
-   git clone <repository-url>
-   cd <repository-name>
+   git clone https://github.com/JeremyDudet/agent-test
+   cd agent-test
    ```
 
 2. Install dependencies
