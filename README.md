@@ -34,12 +34,37 @@ An intelligent command-line expense tracking application that uses GPT-4 to dete
 
 3. Set up environment variables
    Create a `.env` file in the root directory with:
+
    ```bash
    OPENAI_API_KEY=your_openai_api_key
    SUPABASE_URL=your_supabase_url
    SUPABASE_KEY=your_supabase_key
    TIMEZONE=America/Los_Angeles # Optional, defaults to America/Los_Angeles
    ```
+
+   4. Set up Supabase tables
+      In your Supabase dashboard, create the following tables:
+
+   **categories** `sql
+create table categories (
+  id uuid default uuid_generate_v4() primary key,
+  name text not null unique,
+  description text,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);   `
+
+   **expenses** `sql
+create table expenses (
+  id uuid default uuid_generate_v4() primary key,
+  amount decimal not null,
+  description text not null,
+  category_id uuid references categories(id),
+  date timestamp with time zone not null,
+  merchant text,
+  tags text[],
+  metadata jsonb default '{}'::jsonb,
+  date_created timestamp with time zone default timezone('utc'::text, now()) not null
+);   `
 
 ## Usage
 
