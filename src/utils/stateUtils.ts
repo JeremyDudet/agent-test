@@ -64,7 +64,6 @@ export class StateUtils {
       },
     });
   }
-
   /**
    * Get current time context or create new one
    */
@@ -130,7 +129,6 @@ export class StateUtils {
 
     return validTransitions[from]?.includes(to) ?? false;
   }
-
   /**
    * Create middleware for state changes
    */
@@ -184,7 +182,6 @@ export class StateUtils {
     console.log("=====================");
   }
 }
-
 export function createInitialState(): AgentState {
   return {
     messages: [],
@@ -244,7 +241,6 @@ export const mergeStates = (
     ...(newState.actionContext || {}),
   },
 });
-
 // If we need to add a proposal, we can use this function instead
 export function addProposalToState(
   state: AgentState,

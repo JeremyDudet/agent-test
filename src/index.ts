@@ -1,377 +1,180 @@
-import { config } from "dotenv";
-import readline from "readline";
-import { ExpenseAgent } from "./core/Agent";
-import type { ActionProposal, ActionParameters } from "./types";
-import chalk from "chalk";
-import { ActionQueue } from "./core/ActionQueue";
-import { StateManager } from "./core/StateManager";
-import { ExpenseTools } from "./services/expense/ExpenseService";
+import { expenseApp } from "./core/ExpenseWorkflow";
+import { HumanMessage } from "@langchain/core/messages";
+import { createInterface } from "readline";
+import type { MessageContent, BaseMessage } from "@langchain/core/messages";
 
-config();
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-
-async function editActionProposal(
-  proposal: ActionProposal
-): Promise<ActionProposal> {
-  const stateManager = StateManager.getInstance();
-
-  console.log("\nEditing action:", chalk.bold(proposal.action));
-  console.log(
-    "Current parameters:",
-    chalk.gray(JSON.stringify(proposal.parameters, null, 2))
-  );
-
-  const updatedParams: Record<string, any> = {};
-  for (const [key, value] of Object.entries(proposal.parameters)) {
-    const answer = await new Promise<string>((resolve) => {
-      rl.question(
-        `Enter new value for ${key} (current: ${value}), or press enter to keep: `,
-        resolve
-      );
-    });
-    updatedParams[key] = answer.trim() || value;
-  }
-
-  const editedProposal = {
-    ...proposal,
-    parameters: updatedParams,
-    status: "modified" as const,
-  };
-
-  // Update the proposal in global state
-  stateManager.updateState({
-    actionContext: {
-      ...stateManager.getState().actionContext,
-      proposals: stateManager
-        .getState()
-        .actionContext.proposals.map((p) =>
-          p.id === proposal.id ? editedProposal : p
-        ),
-    },
-  });
-
-  return editedProposal;
+// Define interfaces for better type safety
+interface Proposal {
+  // Add specific properties your proposals should have
+  [key: string]: any;
 }
 
-async function handleActionProposals(
-  proposals: ActionProposal[],
-  actionQueue: ActionQueue
-): Promise<ActionProposal[]> {
-  while (true) {
-    console.log("\nProposed actions:");
-    proposals.forEach((proposal, index) => {
-      const status =
-        proposal.status === "modified" ? chalk.yellow("(modified)") : "";
-      console.log(
-        `${index + 1}. ${chalk.bold(proposal.action)} ` +
-          `(${chalk.blue(proposal.confidence)}% confident) ${status}\n` +
-          `   Parameters: ${chalk.gray(
-            JSON.stringify(proposal.parameters)
-          )}\n` +
-          `   Context: ${chalk.gray(proposal.context)}`
-      );
-    });
-
-    const answer = await new Promise<string>((resolve) => {
-      rl.question(
-        "\nOptions:\n" +
-          "- Numbers (comma-separated) to accept proposals\n" +
-          '- "e NUMBER" to edit a proposal\n' +
-          '- "n" to reject all\n' +
-          '- "d" to done/proceed\n' +
-          "Choice: ",
-        resolve
-      );
-    });
-
-    if (answer.toLowerCase() === "n") {
-      proposals.forEach((proposal) => actionQueue.remove(proposal.id));
-      return proposals.map((p) => ({ ...p, status: "rejected" }));
-    } else if (answer.toLowerCase() === "d") {
-      return proposals.map((p) => ({ ...p, status: "accepted" }));
-    } else if (answer.toLowerCase().startsWith("e")) {
-      const index = parseInt(answer.split(" ")[1]) - 1;
-      if (index >= 0 && index < proposals.length) {
-        proposals[index] = await editActionProposal(proposals[index]);
-      }
-      continue;
-    } else {
-      const acceptedIndices = answer
-        .split(",")
-        .map((n) => parseInt(n.trim()) - 1)
-        .filter((i) => i >= 0 && i < proposals.length);
-
-      if (acceptedIndices.length > 0) {
-        return proposals.map((p, i) => ({
-          ...p,
-          status: acceptedIndices.includes(i) ? "accepted" : "rejected",
-        }));
-      }
-      continue;
-    }
-  }
+interface WorkflowState {
+  messages: BaseMessage[];
+  [key: string]: any;
 }
 
-// Helper function to show help menu
-const showHelp = () => {
-  const stateManager = StateManager.getInstance();
-  const state = stateManager.getState();
+// This array will store all proposals created so far:
+const proposals: Proposal[] = [];
 
-  console.log("\nAvailable Commands:");
-  console.log("- help: Show this help message");
-  console.log("- status: View current proposals in queue");
-  console.log("- review: Review and act on pending proposals");
-  console.log("- debug: Show detailed system state");
-  console.log("- exit: Exit the application");
-
-  // Show additional context-specific help based on current state
-  if (state.actionContext.proposals.length > 0) {
-    console.log("\nPending Actions:");
-    console.log(
-      `You have ${
-        state.actionContext.proposals.filter((p) => p.status === "pending")
-          .length
-      } proposals waiting for review`
-    );
+function convertMessageContentToString(content: MessageContent): string {
+  if (Array.isArray(content)) {
+    // Handle complex message content by converting to string
+    return content
+      .map((part) => (typeof part === "string" ? part : JSON.stringify(part)))
+      .join(" ")
+      .trim();
   }
-};
+  // Handle simple string content
+  return content.trim();
+}
 
-// Setup readline interface with state-aware error handling
-const setupReadline = () => {
-  const stateManager = StateManager.getInstance();
-
-  rl.on("error", (err) => {
-    console.error("Readline error:", err);
-    stateManager.updateState({
-      actionContext: {
-        ...stateManager.getState().actionContext,
-        isProcessing: false,
-      },
-    });
-  });
-
-  rl.on("close", () => {
-    // Clean up state before exiting
-    stateManager.updateState({
-      actionContext: {
-        proposals: [],
-        currentInput: "",
-        isProcessing: false,
-      },
-    });
-    process.exit(0);
-  });
-};
-
-// Initialize the application with proper state management
-const initializeApp = () => {
-  const stateManager = StateManager.getInstance();
-
-  // Set initial state
-  stateManager.setState({
-    messages: [],
-    context: {},
-    currentStep: "initial",
-    toolCalls: [],
-    actionContext: {
-      proposals: [],
-      currentInput: "",
-      isProcessing: false,
-    },
-  });
-
-  // Setup event listeners
-  setupReadline();
-
-  console.log("\nExpense Tracking Assistant\n");
-  console.log("Type 'help' to see available commands\n");
-};
-
-// Update the main function to use state-aware initialization
 async function main() {
-  initializeApp();
-
-  const agent = new ExpenseAgent();
-  const actionQueue = new ActionQueue();
-  const stateManager = StateManager.getInstance();
-
-  // Background processor
-  actionQueue.on("proposalUpdated", async () => {
-    const pendingProposals = actionQueue.getPending();
-    if (pendingProposals.length > 0) {
-      console.log("\nPending actions available. Type 'review' to see them.");
-    }
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
   });
 
-  let processingInput = false;
+  console.log(
+    "Welcome! Type 'exit' to quit. Type 'review' to view proposals.\n"
+  );
+  console.log("You can also do 'approve [n]' to approve the n-th proposal.\n");
 
-  const processInput = async (input: string) => {
-    if (processingInput) return;
-    processingInput = true;
+  // Use the same thread_id to preserve short-term memory across messages
+  const threadId = "demo-thread-1";
 
-    try {
-      const stateManager = StateManager.getInstance();
-
-      if (input.toLowerCase() === "help") {
-        showHelp();
-      } else if (input.toLowerCase() === "debug") {
-        const state = stateManager.getState();
-        console.log("\nCurrent System State:");
-        console.log("Messages:", state.messages);
-        console.log("Context:", state.context);
-        console.log("Current Step:", state.currentStep);
-        console.log("Tool Calls:", state.toolCalls);
-        console.log("Action Context:", state.actionContext);
-      } else if (input.toLowerCase() === "status") {
-        const state = stateManager.getState();
-        const proposals = state.actionContext.proposals;
-
-        if (proposals.length > 0) {
-          console.log("\nCurrent proposals:");
-          proposals.forEach((proposal, index) => {
-            console.log(
-              `${index + 1}. ${proposal.action} [${proposal.status}] - ${
-                proposal.parameters.description
-              } ($${proposal.parameters.amount})`
-            );
-          });
-        } else {
-          console.log("\nNo proposals in queue.\n");
-        }
-      } else if (input.toLowerCase() === "review") {
-        const pendingProposals = stateManager
-          .getState()
-          .actionContext.proposals.filter((p) => p.status === "pending");
-
-        if (pendingProposals.length > 0) {
-          const updatedProposals = await handleActionProposals(
-            pendingProposals,
-            actionQueue
-          );
-
-          // Process accepted proposals first
-          if (updatedProposals.some((p) => p.status === "accepted")) {
-            await agent.processAcceptedActions(updatedProposals);
-          }
-
-          // After processing, update statuses in global state
-          stateManager.updateState({
-            actionContext: {
-              ...stateManager.getState().actionContext,
-              proposals: stateManager
-                .getState()
-                .actionContext.proposals.map((p) => {
-                  const updated = updatedProposals.find((up) => up.id === p.id);
-                  return updated || p;
-                })
-                .filter((p) => p.status === "pending"), // Remove processed proposals
-            },
-          });
-        } else {
-          console.log("\nNo pending actions to review.\n");
-        }
-      } else {
-        const proposals = await agent.processMessage(input);
-        if (proposals.length > 0) {
-          console.log(`Created ${proposals.length} new proposal(s)`);
-          actionQueue.add(proposals);
-        }
-      }
-    } catch (error) {
-      console.error("Error processing input:", error);
-    } finally {
-      processingInput = false;
+  async function handleInput(userInput: string) {
+    const lower = userInput.trim().toLowerCase();
+    // 1) Check for special commands:
+    if (userInput.toLowerCase() === "exit") {
+      rl.close();
+      return;
     }
-  };
 
-  const askQuestion = () => {
-    rl.question("> ", async (input) => {
-      if (input.toLowerCase() === "exit") {
-        rl.close();
+    if (lower === "review") {
+      if (proposals.length === 0) {
+        console.log("No proposals yet.\n");
+      } else {
+        console.log("Here are your pending proposals:\n");
+        proposals.forEach((p, i) => {
+          console.log(`Proposal #${i + 1}:`, JSON.stringify(p, null, 2));
+        });
+      }
+      console.log("\nEnter another input or 'exit':");
+      return;
+    }
+
+    // 2) Approve a single proposal by number, e.g. "approve 1"
+    if (lower.startsWith("approve")) {
+      const parts = lower.split(" ");
+      if (parts.length < 2) {
+        console.log("Usage: approve [proposal_number]\n");
+        return;
+      }
+      const index = parseInt(parts[1], 10) - 1;
+      if (isNaN(index) || index < 0 || index >= proposals.length) {
+        console.log("Invalid proposal number.\n");
         return;
       }
 
-      await processInput(input);
-      askQuestion(); // Continue the loop after processing
-    });
-  };
+      // We'll feed the agent a special message that says:
+      // "The user has approved the following proposal. Please run the relevant tool."
+      const approvedProposal = proposals[index];
+      console.log(`Approving proposal #${index + 1}...`);
 
-  askQuestion(); // Start the input loop
-}
+      try {
+        // After approval, we pass a new message to the agent describing acceptance.
+        // That triggers the agent to call add_expense tool if relevant.
+        const finalState = await expenseApp.invoke(
+          {
+            messages: [
+              new HumanMessage(
+                `APPROVAL NOTICE: The user has approved this proposal: ${JSON.stringify(
+                  approvedProposal
+                )}`
+              ),
+            ],
+          },
+          {
+            configurable: {
+              thread_id: threadId,
+              checkpoint_ns: "expense-tracker",
+            },
+          }
+        );
 
-interface CategoryConfirmationError {
-  code: string;
-  suggestedCategory: string;
-  reasoning: string;
-  originalParams: ActionParameters;
-}
+        // Optionally remove the proposal from the local store
+        proposals.splice(index, 1);
 
-function isCategoryConfirmationError(
-  error: unknown
-): error is CategoryConfirmationError {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "NEEDS_CATEGORY_CONFIRMATION" &&
-    "suggestedCategory" in error &&
-    "reasoning" in error &&
-    "originalParams" in error
-  );
-}
-
-export async function handleExpenseProposal(
-  proposal: ActionProposal
-): Promise<void> {
-  try {
-    try {
-      await ExpenseTools.addExpense(proposal.parameters);
-    } catch (error) {
-      if (isCategoryConfirmationError(error)) {
-        console.log("\nNew category suggestion:");
-        console.log(`Category: ${chalk.yellow(error.suggestedCategory)}`);
-        console.log(`Reasoning: ${chalk.gray(error.reasoning)}`);
-
-        const answer = await new Promise<string>((resolve) => {
-          rl.question(
-            `Do you want to create this new category? (y/n/edit): `,
-            resolve
-          );
-        });
-
-        if (answer.toLowerCase() === "n") {
-          console.log("Category creation cancelled. Expense not added.");
-          return;
+        // Inspect the agent's response for any final messages
+        const { messages: allMessages } = finalState;
+        const lastMessage = allMessages[allMessages.length - 1];
+        if (lastMessage?.content) {
+          console.log("Agent says:", lastMessage.content, "\n");
+        } else {
+          console.log("Agent didn't respond.\n");
         }
-
-        if (answer.toLowerCase() === "edit") {
-          const newCategory = await new Promise<string>((resolve) => {
-            rl.question("Enter new category name: ", resolve);
-          });
-          error.originalParams.category = newCategory;
-        }
-
-        // Try adding expense again with confirmed/edited category
-        error.originalParams.isNewCategory = false; // Category is now confirmed
-        await ExpenseTools.addExpense(error.originalParams);
-      } else {
-        throw error;
+      } catch (error) {
+        console.error("Error approving proposal:", error);
       }
+      console.log(
+        "Enter your next input, 'review' to see proposals, or 'exit':"
+      );
+      return;
+    }
+    // 3) If none of the above commands match, treat as a user input to generate proposals
+    try {
+      const finalState = (await expenseApp.invoke(
+        {
+          messages: [new HumanMessage(userInput)],
+        },
+        {
+          configurable: {
+            thread_id: threadId,
+            checkpoint_ns: "expense-tracker",
+          },
+        }
+      )) as WorkflowState;
+
+      const { messages } = finalState;
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.content) {
+        const contentString = convertMessageContentToString(
+          lastMessage.content
+        );
+        let parsed: unknown;
+
+        try {
+          parsed = JSON.parse(contentString);
+        } catch {
+          parsed = contentString;
+        }
+
+        // Type-guard to check if it's a single proposal object
+        const isProposal = (value: unknown): value is Proposal =>
+          typeof value === "object" && value !== null;
+
+        if (isProposal(parsed) && !Array.isArray(parsed)) {
+          proposals.push(parsed);
+          console.log("New proposal(s) added.\n");
+        } else if (Array.isArray(parsed) && parsed.length > 0) {
+          const validProposals = parsed.filter(isProposal);
+          proposals.push(...validProposals);
+          console.log("New proposals added.\n");
+        } else {
+          console.log("No proposals or unrecognized format.\n");
+        }
+      } else {
+        console.log("No proposals.\n");
+      }
+    } catch (error) {
+      console.error("Error processing input:", error);
     }
 
-    console.log(
-      `✓ Expense added: ${proposal.parameters.description} ($${proposal.parameters.amount})`
-    );
-  } catch (error) {
-    console.error("Error processing expense:", error);
+    console.log("Enter your next input, 'review' to see proposals, or 'exit':");
   }
+
+  rl.on("line", handleInput);
 }
 
-main().catch((error) => {
-  console.error("Application error:", error);
-  process.exit(1);
-});
+main().catch(console.error);

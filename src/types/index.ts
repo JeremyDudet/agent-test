@@ -1,5 +1,6 @@
 import type { StateManager } from "../core/StateManager";
 import type { ActionQueue } from "../core/ActionQueue";
+import { BaseMessage } from "@langchain/core/messages";
 
 // Base state interfaces
 export interface AgentState {
@@ -189,3 +190,23 @@ export interface TavilySearchAPIResponse {
   results: TavilySearchResult[];
   query: string;
 }
+
+export interface GraphState {
+  messages: BaseMessage[];
+  context: ExpenseContext;
+  understanding: UnderstandingContext;
+  actionContext: ActionContext;
+  toolCalls: ToolCall[];
+}
+
+export interface NodeResponse {
+  messages?: BaseMessage[];
+  context?: ExpenseContext;
+  understanding?: UnderstandingContext;
+  actionContext?: ActionContext;
+  toolCalls?: ToolCall[];
+  proposals?: ActionProposal[];
+}
+
+export type EdgeConditionFn = (state: GraphState) => string;
+export type NodeFn = (state: GraphState) => Promise<NodeResponse>;

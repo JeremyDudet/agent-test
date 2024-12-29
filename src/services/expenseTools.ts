@@ -1,6 +1,6 @@
 import { format } from "date-fns";
-import type { ActionParameters } from "../../types";
-import { supabase } from "../database/supabase";
+import type { ActionParameters } from "../types";
+import { supabase } from "./supabase";
 
 export class ExpenseTools {
   static async addExpense(params: ActionParameters): Promise<any> {
