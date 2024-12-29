@@ -1,6 +1,5 @@
 import { OpenAI } from "openai";
 import type { Message, UnderstandingContext } from "../types";
-import { config } from "../config";
 
 export class UnderstandingAgent {
   private openai: OpenAI;
@@ -22,19 +21,21 @@ export class UnderstandingAgent {
         {
           role: "system",
           content: `You are an AI assistant that understands user intentions regarding expenses.
-                   Analyze the input and extract key details about expenses or queries.
+                   Extract basic facts from user input about expenses or queries.
                    
                    Return your response as a JSON object with the following structure:
                    {
-                     "intent": "add_expense" | "get_insights" | "categorize" | "search" | "question" | "need_clarification",
+                     "intent": "add_expense" | "get_insights" | "search" | "question" | "need_clarification",
                      "amount": number | null,
                      "description": string | null,
                      "date": string | null,
                      "relativeMonths": number | null,
                      "relativeDays": number | null,
-                     "category": string | null,
                      "needsClarification": boolean,
-                     "clarificationReason": string | null
+                     "clarificationReason": string | null,
+                     "confidence": {
+                       "understanding": number
+                     }
                    }`,
         },
         ...history,

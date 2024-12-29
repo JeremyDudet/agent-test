@@ -11,6 +11,18 @@ export class ExpenseTools {
 
       const date = params.date ? new Date(params.date) : new Date();
 
+      // Generate embedding for the description
+      const { data: embedding } = await supabase.functions.invoke(
+        "generate-embedding",
+        {
+          body: { text: params.description },
+        }
+      );
+
+      if (!embedding) {
+        throw new Error("Failed to generate embedding for expense description");
+      }
+
       // Handle category
       let category_id = params.category_id;
 
@@ -54,6 +66,7 @@ export class ExpenseTools {
         tags: params.tags || [],
         metadata: params.metadata || {},
         date_created: new Date().toISOString(),
+        description_embedding: embedding, // Add the embedding to the expense record
       };
 
       const { data, error } = await supabase
@@ -110,18 +123,42 @@ export class ExpenseTools {
     limit?: number;
   }): Promise<any> {
     try {
-      // Mock similar expense search
+      // Get embedding for the query description
+      const { data: embedding } = await supabase.functions.invoke(
+        "generate-embedding",
+        {
+          body: { text: params.description },
+        }
+      );
+
+      if (!embedding) {
+        throw new Error("Failed to generate embedding for search query");
+      }
+
+      // Perform vector similarity search
+      const { data: similarExpenses, error } = await supabase.rpc(
+        "search_expenses",
+        {
+          query_embedding: embedding,
+          similarity_threshold: 0.5,
+          match_count: params.limit || 5,
+        }
+      );
+
+      if (error) {
+        throw new Error(`Database error: ${error.message}`);
+      }
+
       return {
         query: params.description,
         limit: params.limit || 5,
-        results: [
-          { description: params.description, amount: 50.0, date: "2024-03-01" },
-          {
-            description: `Similar to ${params.description}`,
-            amount: 45.0,
-            date: "2024-02-28",
-          },
-        ],
+        results: similarExpenses.map((expense: any) => ({
+          description: expense.description,
+          amount: expense.amount,
+          date: expense.date,
+          category: expense.category_name,
+          similarity: expense.similarity,
+        })),
       };
     } catch (error) {
       throw new Error(

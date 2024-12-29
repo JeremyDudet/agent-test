@@ -175,3 +175,17 @@ export type ToolParameters =
   | GetInsightsParams
   | GetSimilarExpensesParams
   | CategorizeExpenseParams;
+
+export interface TavilySearchResult {
+  title: string;
+  url: string;
+  content: string;
+  score: number;
+  source: string;
+}
+
+export interface TavilySearchAPIResponse {
+  answer?: string;
+  results: TavilySearchResult[];
+  query: string;
+}

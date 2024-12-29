@@ -20,6 +20,7 @@
     "@langchain/langgraph": "^0.2.36",
     "@langchain/openai": "^0.3.16",
     "@supabase/supabase-js": "^2.47.10",
+    "@tavily/core": "^0.0.2",
     "chalk": "^5.4.1",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
