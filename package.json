@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/cors": "^2.8.17",
     "@types/uuid": "^10.0.0"
   },
   "peerDependencies": {
@@ -21,6 +22,8 @@
     "@langchain/openai": "^0.3.16",
     "@supabase/supabase-js": "^2.47.10",
     "@tavily/core": "^0.0.2",
+    "@types/body-parser": "^1.19.5",
+    "@types/express": "^5.0.0",
     "body-parser": "^1.20.3",
     "chalk": "^5.4.1",
     "cors": "^2.8.5",
@@ -29,6 +32,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "openai": "^4.77.0",
+    "socket.io": "^4.8.1",
     "uuid": "^11.0.3"
   }
 }
