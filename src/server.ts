@@ -26,117 +26,168 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // Handle WebSocket connections
-io.on("connection", (socket) => {
-  console.log("Client connected");
-  
+io.on('connection', (socket) => {
+  console.log('Client connected');
   let audioChunks: Buffer[] = [];
-  
-  socket.on("audioData", (data) => {
-    console.log("Received audioData. Byte length:", data.byteLength);
-    audioChunks = [Buffer.from(data)]; // Reset and store single chunk
-    console.log("audioChunks size:", audioChunks.length);
-  });
-  
-  socket.on("audioComplete", async () => {
-    console.log("audioComplete event triggered. Combining chunks...");
+   // Called with batched chunks
+   socket.on('audioDataPartial', async (data) => {
+    console.log('[SERVER] Received partial chunk');
     try {
-      const audioBuffer = Buffer.concat(audioChunks);
-      console.log("Combined audioBuffer size:", audioBuffer.byteLength);
-      
-      // Log the first 32 bytes of the audio buffer to check format
-      console.log("First 32 bytes:", Buffer.from(audioBuffer).slice(0, 32));
-      
-      const tempFilePath = `/tmp/audio-${Date.now()}.wav`;
-      await Bun.write(tempFilePath, audioBuffer);
-      
-      // Create a BunFile instance
-      const bunFile = Bun.file(tempFilePath, { type: "audio/wav" });
-      const fileBuffer = await bunFile.arrayBuffer();
-      
-      // Log the first 32 bytes of the file to verify it matches
-      console.log("First 32 bytes of file:", Buffer.from(fileBuffer).slice(0, 32));
-      
-      const file = new File([fileBuffer], "audio.wav", {
-        type: "audio/wav",
-        lastModified: Date.now(),
-      });
+      // Validate incoming data
+      if (!data || !data.byteLength) {
+        throw new Error('Invalid audio data received');
+      }
 
-      console.log("File details:", {
-        size: file.size,
-        type: file.type,
-        name: file.name
-      });
-
-      console.log("Sending file to OpenAI Whisper...");
+      const buffer = Buffer.from(data);
+      console.log('[SERVER] Processing chunk, size:', buffer.byteLength);
+      
+      // Create a File object with proper error handling
+      let file;
       try {
-        const transcription = await openai.audio.transcriptions.create({
-          file,
-          model: "whisper-1",
-          language: "en",
-          response_format: "verbose_json",
-          temperature: 0.2,
-          prompt: "This is an expense-related voice message in English."
-        });
-        
-        console.log("Full Whisper response:", JSON.stringify(transcription, null, 2));
-        
-        if (!transcription.text || transcription.text.trim().length === 0) {
-          throw new Error("Empty transcription received");
-        }
-        
-        console.log("Raw transcription:", transcription);
-        console.log("Transcription text:", transcription.text);
-
-        const finalState = await expenseApp.invoke(
-          {
-            messages: [new HumanMessage(transcription.text)],
+        file = new File([buffer], 'audio-chunk.wav', { type: 'audio/wav' });
+      } catch (err) {
+        throw new Error(`Failed to create File object: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      
+      console.log('[SERVER] Created File object, sending to Whisper...');
+      
+      // Process through Whisper
+      const transcription = await openai.audio.transcriptions.create({
+        file,
+        model: 'whisper-1',
+        language: 'en'
+      });
+      
+      console.log('[SERVER] Transcription received:', transcription.text);
+      
+      // Only process non-empty transcriptions
+      if (transcription.text.trim()) {
+        const finalState = await expenseApp.invoke({
+          messages: [new HumanMessage(transcription.text)],
+        }, {
+          configurable: {
+            thread_id: socket.id,
+            checkpoint_ns: 'expense-tracker',
           },
-          {
-            configurable: {
-              thread_id: socket.id,
-              checkpoint_ns: "expense-tracker",
-            },
-          }
-        );
-        console.log("Expense workflow finalState:", finalState);
-
+        });
+  
         const { messages } = finalState;
         const lastMessage = messages[messages.length - 1];
-
-        let parsed;
+        
         if (lastMessage?.content) {
+          console.log('[SERVER] Content type:', typeof lastMessage.content);
+          console.log('[SERVER] Raw content:', lastMessage.content);
+          let parsed;
           try {
-            parsed = JSON.parse(
-              typeof lastMessage.content === 'string'
-                ? lastMessage.content
-                : JSON.stringify(lastMessage.content)
-            );
+            // First check if content is already an object
+            if (typeof lastMessage.content === 'object') {
+              parsed = lastMessage.content;
+            } else {
+              // Only try to parse if it's a string
+              const contentStr = lastMessage.content.toString().trim();
+              try {
+                parsed = JSON.parse(contentStr);
+              } catch {
+                // If JSON parsing fails, use the string content directly
+                parsed = contentStr;
+              }
+            }
+            
+            // Emit proposals immediately if they exist
+            if (parsed.expense_proposals || parsed.proposals || parsed.action === "add_expense") {
+              const proposals = parsed.expense_proposals || parsed.proposals || [parsed];
+              console.log('[SERVER] Emitting proposals:', proposals);
+              socket.emit('proposals', { proposals });
+            } else {
+              console.log('[SERVER] Parsed content but no proposals found:', parsed);
+            }
           } catch (err) {
-            parsed = lastMessage.content;
+            console.warn('[SERVER] Failed to parse message content:', err);
+            // Try to extract expense information using regex as fallback
+            const contentStr = lastMessage.content.toString();
+            const amountRegex = /\$(\d+)/g;
+            const amounts = [...contentStr.matchAll(amountRegex)];
+            
+            if (amounts.length > 0) {
+              const proposals = amounts.map(match => ({
+                action: 'add_expense',
+                parameters: {
+                  amount: parseInt(match[1]),
+                  description: lastMessage.content
+                }
+              }));
+              console.log('[SERVER] Generated fallback proposals:', proposals);
+              socket.emit('proposals', { proposals });
+            }
           }
         }
-
-        console.log("Parsed proposals:", parsed);
-        socket.emit("proposals", { proposals: parsed || null });
-        
-        audioChunks = [];
-        console.log("audioChunks reset, ready for next recording.");
-        
-      } catch (whisperError) {
-        console.error("Error processing audio:", whisperError);
-        socket.emit("error", { message: "Error processing audio" });
       }
-    } catch (err) {
-      console.error("Error processing audio:", err);
-      socket.emit("error", { message: "Error processing audio" });
+    } catch (error: unknown) {
+      console.error('[SERVER] Error processing chunk:', error);
+      socket.emit('error', { 
+        message: `Error processing chunk: ${error instanceof Error ? error.message : String(error)}`
+      });
     }
   });
 
-  socket.on("disconnect", () => {
-    console.log("Client disconnected, clearing audioChunks");
-    audioChunks = [];
+  // Called when user is fully done, or to finalize the entire chunk
+  socket.on('audioData', (data) => {
+  console.log('Received final chunk. Byte length:', data.byteLength);
+  audioChunks.push(Buffer.from(data));
   });
-});
+  socket.on('audioComplete', async () => {
+  console.log('audioComplete event triggered. Combining chunks...');
+  try {
+  const audioBuffer = Buffer.concat(audioChunks);
+  console.log('Combined audioBuffer size:', audioBuffer.byteLength);
+  // Create a File object to send to Whisper
+  const file = new File([audioBuffer], 'audio.wav', { type: 'audio/wav' });
+  console.log('Sending file to Whisper...');
+  const transcription = await openai.audio.transcriptions.create({
+  file,
+  model: 'whisper-1',
+  language: 'en'
+  });
+  console.log('Final transcription:', transcription.text);
+  // Process logic in your expense workflow:
+  const finalState = await expenseApp.invoke(
+  {
+  messages: [new HumanMessage(transcription.text)],
+  },
+  {
+  configurable: {
+  thread_id: socket.id,
+  checkpoint_ns: 'expense-tracker',
+  },
+  }
+  );
+  const { messages } = finalState;
+  const lastMessage = messages[messages.length - 1];
+  let parsed;
+  if (lastMessage?.content) {
+  try {
+  parsed = JSON.parse(
+  typeof lastMessage.content === 'string'
+  ? lastMessage.content
+  : JSON.stringify(lastMessage.content)
+  );
+  } catch (err) {
+  parsed = lastMessage.content;
+  }
+  }
+  socket.emit('proposals', { proposals: parsed || null });
+  audioChunks = [];
+  console.log('audioChunks reset, ready for next recording.');
+  } catch (err) {
+  console.error('Error processing audio:', err);
+  socket.emit('error', { message: 'Error processing audio' });
+  }
+  });
+  socket.on('disconnect', () => {
+  console.log('Client disconnected, clearing audioChunks');
+  audioChunks = [];
+  });
+  });
 
 const handleMessages: RequestHandler = async (req: Request, res: Response) => {
   const { text, threadId } = req.body;

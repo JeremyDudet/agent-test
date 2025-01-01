@@ -174,22 +174,27 @@ export class ExpenseTools {
     amount: number;
   }): Promise<any> {
     try {
-      // Mock categorization logic
-      const categories = [
-        "groceries",
-        "entertainment",
-        "utilities",
-        "transportation",
-        "dining",
-      ];
-      const suggestedCategory =
-        categories[Math.floor(Math.random() * categories.length)];
+      // First get similar expenses to learn from past categorizations
+      const similarExpenses = await ExpenseTools.getSimilarExpenses({
+        description: params.description,
+        limit: 3
+      });
+
+      // Get all available categories
+      const { data: categories, error } = await supabase
+        .from("categories")
+        .select("id, name, description");
+
+      if (error) {
+        throw new Error(`Failed to fetch categories: ${error.message}`);
+      }
 
       return {
         description: params.description,
         amount: params.amount,
-        suggestedCategory,
-        confidence: 0.85,
+        similarExpenses: similarExpenses.results,
+        availableCategories: categories,
+        needsCategorization: true
       };
     } catch (error) {
       throw new Error(

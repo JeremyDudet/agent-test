@@ -47,8 +47,16 @@ const model = new ChatOpenAI({
 function prependSystemMessage(messages: BaseMessage[]): BaseMessage[] {
   const systemInstruction = new SystemMessage(
     "You are an expense proposal agent. Do not produce conversational text. " +
-      "Output only JSON or minimal text describing proposals or final statuses. " +
-      "Only propose CRUD actions if applicable, otherwise state 'no proposals'."
+    "Output only valid JSON proposals in this exact format: " +
+    '{ "action": "add_expense", "parameters": { "amount": number, "description": string, "category": string } }. ' +
+    "When categorizing expenses:\n" +
+    "1. Use the categorize_expense tool to get similar expenses and available categories\n" +
+    "2. Analyze the expense description and amount\n" +
+    "3. Consider similar past expenses' categories\n" +
+    "4. Select the most appropriate category from available categories\n" +
+    "5. Include your reasoning in categoryReasoning\n" +
+    "For multiple expenses in one message, output an array of proposals.\n" +
+    "Only propose CRUD actions if applicable, otherwise output: { \"proposals\": [] }"
   );
   return [systemInstruction, ...messages];
 }
@@ -64,7 +72,7 @@ async function callModelNode(state: typeof StateAnnotation.State) {
 
   // (Optional) Post-process to extract proposals from the response
   // For instance, you could parse JSON or apply regex.
-
+  console.log('[DEBUG] LLM Response:', response);
   return { messages: [response] };
 }
 

@@ -1,5 +1,4 @@
 import type { StateManager } from "../core/StateManager";
-import type { ActionQueue } from "../core/ActionQueue";
 import { BaseMessage } from "@langchain/core/messages";
 
 // Base state interfaces
@@ -144,10 +143,6 @@ export type ProposalHandler = (proposal: ActionProposal) => Promise<void>;
 // Component props types
 export interface StateAwareProps {
   stateManager: StateManager;
-}
-
-export interface QueueAwareProps {
-  actionQueue: ActionQueue;
 }
 
 export interface AddExpenseParams extends ActionParameters {
