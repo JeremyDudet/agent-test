@@ -6,7 +6,6 @@ import { v4 as uuidv4 } from "uuid";
 import os from "os";
 import path from "path";
 import fs from "fs";
-import { TranscriptionBufferManager } from "./TranscriptionBufferManager";
 import { LoggingService, LogLevel } from "../logging/LoggingService";
 import {
   ExpenseTrackerError,
@@ -17,9 +16,10 @@ import {
 export class TranscriptionService extends EventEmitter {
   private openai: OpenAI;
   private tempDir: string;
-  private bufferManager: TranscriptionBufferManager;
   private logger: LoggingService;
-  private accumulatedTranscript = "";
+  private readonly MIN_CHUNK_SIZE = 4000;
+  private readonly MAX_RETRIES = 3;
+  private readonly RETRY_DELAY = 1000; // ms
 
   constructor() {
     super();
@@ -27,32 +27,15 @@ export class TranscriptionService extends EventEmitter {
       apiKey: process.env.OPENAI_API_KEY,
     });
     this.tempDir = path.join(os.tmpdir(), "transcriptions");
-    this.bufferManager = new TranscriptionBufferManager();
     this.logger = LoggingService.getInstance();
-
-    // Listen for buffer updates
-    this.bufferManager.on("bufferUpdated", (newText) => {
-      this.accumulatedTranscript += newText + " ";
-      this.emit("partialTranscript", newText);
-    });
   }
 
-  getAccumulatedTranscript(): string {
-    return this.accumulatedTranscript.trim();
-  }
-
-  clearAccumulatedTranscript(): void {
-    this.accumulatedTranscript = "";
-    this.bufferManager.clear();
-  }
-
-  // For single/partial chunks
   async transcribeAudioChunk(
     audioBuffer: ArrayBuffer,
     isFinal = false
   ): Promise<string> {
     try {
-      if (audioBuffer.byteLength < 4000) {
+      if (audioBuffer.byteLength < this.MIN_CHUNK_SIZE) {
         this.logger.log(
           LogLevel.DEBUG,
           "Skipping short audio chunk",
@@ -63,99 +46,149 @@ export class TranscriptionService extends EventEmitter {
       }
 
       const tempFilePath = path.join(this.tempDir, `${uuidv4()}.wav`);
-      await writeFile(tempFilePath, Buffer.from(audioBuffer));
-      const audioStream = createReadStream(tempFilePath);
+      await this.writeAudioFile(tempFilePath, audioBuffer);
 
-      // For partial transcripts, we can keep a lower temperature
-      // and rely on partial context from getLastPhrase
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: audioStream,
-        model: "whisper-1",
-        language: "en",
-        response_format: "text",
-        temperature: 0.3,
-        prompt: this.bufferManager.getLastPhrase(),
-      });
-
-      await fs.promises.unlink(tempFilePath);
-
-      if (!transcription.trim()) {
-        return "";
-      }
-
-      if (isFinal) {
-        this.bufferManager.appendFinalTranscript(transcription);
-        this.logger.log(
-          LogLevel.INFO,
-          "Processed final transcript",
-          "TranscriptionService",
-          { transcript: transcription }
-        );
-      } else {
-        this.bufferManager.appendInterimTranscript(transcription);
-        this.logger.log(
-          LogLevel.DEBUG,
-          "Processed interim transcript",
-          "TranscriptionService",
-          { transcript: transcription }
-        );
-      }
-
-      return transcription;
-    } catch (error) {
-      this.logger.error(
-        new ExpenseTrackerError(
-          "Failed to transcribe audio chunk",
-          ErrorCodes.TRANSCRIPTION_FAILED,
-          ErrorSeverity.MEDIUM,
-          {
-            component: "TranscriptionService",
-            originalError:
-              error instanceof Error ? error.message : String(error),
-            isFinal,
-            bufferLength: this.bufferManager.getFullTranscript().length,
-          }
-        )
+      const transcription = await this.retryTranscription(
+        tempFilePath,
+        isFinal
       );
-      throw error;
+
+      await this.cleanup(tempFilePath);
+      return transcription.trim();
+    } catch (error) {
+      throw new ExpenseTrackerError(
+        "Failed to transcribe audio chunk",
+        ErrorCodes.TRANSCRIPTION_FAILED,
+        ErrorSeverity.MEDIUM,
+        {
+          component: "TranscriptionService.transcribeAudioChunk",
+          originalError: error instanceof Error ? error.message : String(error),
+          isFinal,
+        }
+      );
     }
   }
 
-  // For the final, complete audio data
   async transcribeFinalAudio(totalBuffer: Buffer): Promise<string> {
     try {
       const tempFilePath = path.join(this.tempDir, `${uuidv4()}.wav`);
-      await writeFile(tempFilePath, totalBuffer);
-      const audioStream = createReadStream(tempFilePath);
+      await this.writeAudioFile(tempFilePath, totalBuffer);
 
-      // This is a "best effort" final pass
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: audioStream,
-        model: "whisper-1",
-        language: "en",
-        response_format: "text",
-        // You can also tune these parameters to reduce hallucination:
-        temperature: 0, // 0 is more deterministic
-        // no_speech_threshold, logprob_threshold, etc. (if supported by the library)
-      });
+      const transcription = await this.retryTranscription(tempFilePath, true);
 
-      await fs.promises.unlink(tempFilePath);
-
+      await this.cleanup(tempFilePath);
       return transcription.trim();
+    } catch (error) {
+      throw new ExpenseTrackerError(
+        "Failed to transcribe final audio",
+        ErrorCodes.TRANSCRIPTION_FAILED,
+        ErrorSeverity.HIGH,
+        {
+          component: "TranscriptionService.transcribeFinalAudio",
+          originalError: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
+  }
+
+  private async writeAudioFile(
+    filePath: string,
+    audioData: ArrayBuffer | Buffer
+  ): Promise<void> {
+    try {
+      let dataToWrite: Buffer;
+
+      if (Buffer.isBuffer(audioData)) {
+        // It's already a Node.js Buffer
+        dataToWrite = audioData;
+      } else {
+        // Otherwise, treat it as an ArrayBuffer
+        // Cast to ArrayBuffer so TS knows which Buffer.from(...) overload to use
+        dataToWrite = Buffer.from(audioData as ArrayBuffer);
+      }
+
+      await writeFile(filePath, dataToWrite);
+    } catch (error) {
+      throw new ExpenseTrackerError(
+        "Failed to write audio file",
+        ErrorCodes.FILE_OPERATION_FAILED,
+        ErrorSeverity.MEDIUM,
+        {
+          component: "TranscriptionService.writeAudioFile",
+          originalError: error instanceof Error ? error.message : String(error),
+          filePath,
+        }
+      );
+    }
+  }
+
+  private async retryTranscription(
+    filePath: string,
+    isFinal: boolean
+  ): Promise<string> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
+      try {
+        const audioStream = createReadStream(filePath);
+
+        const transcription = await this.openai.audio.transcriptions.create({
+          file: audioStream,
+          model: "whisper-1",
+          language: "en",
+          response_format: "text",
+          temperature: isFinal ? 0 : 0.3,
+        });
+
+        if (transcription) {
+          this.logger.log(
+            isFinal ? LogLevel.INFO : LogLevel.DEBUG,
+            `Transcription successful on attempt ${attempt}`,
+            "TranscriptionService",
+            { isFinal, transcription }
+          );
+          return transcription;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        if (attempt < this.MAX_RETRIES) {
+          await new Promise((resolve) => setTimeout(resolve, this.RETRY_DELAY));
+          continue;
+        }
+      }
+    }
+
+    throw new ExpenseTrackerError(
+      "Max retries exceeded for transcription",
+      ErrorCodes.TRANSCRIPTION_FAILED,
+      ErrorSeverity.HIGH,
+      {
+        component: "TranscriptionService.retryTranscription",
+        originalError: lastError?.message,
+        attempts: this.MAX_RETRIES,
+        isFinal,
+      }
+    );
+  }
+
+  private async cleanup(filePath: string): Promise<void> {
+    try {
+      await fs.promises.unlink(filePath);
     } catch (error) {
       this.logger.error(
         new ExpenseTrackerError(
-          "Failed to transcribe final audio",
-          ErrorCodes.TRANSCRIPTION_FAILED,
-          ErrorSeverity.MEDIUM,
+          "Failed to cleanup temporary file",
+          ErrorCodes.FILE_OPERATION_FAILED,
+          ErrorSeverity.LOW,
           {
-            component: "TranscriptionService.transcribeFinalAudio",
+            component: "TranscriptionService.cleanup",
             originalError:
               error instanceof Error ? error.message : String(error),
+            filePath,
           }
         )
       );
-      throw error;
     }
   }
 }

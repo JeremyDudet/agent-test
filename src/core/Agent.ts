@@ -50,14 +50,14 @@ const StateAnnotation = Annotation.Root({
 
 export class ExpenseAgent {
   private stateManager: StateManager;
-  private actionProposalAgent: ActionProposalAgent;
   private understandingAgent: UnderstandingAgent;
+  private actionProposalAgent: ActionProposalAgent;
   private logger: LoggingService;
 
   constructor() {
     this.stateManager = StateManager.getInstance();
-    this.actionProposalAgent = new ActionProposalAgent();
     this.understandingAgent = new UnderstandingAgent();
+    this.actionProposalAgent = new ActionProposalAgent();
     this.logger = LoggingService.getInstance();
   }
 
@@ -423,14 +423,11 @@ export class ExpenseAgent {
     try {
       const state = this.stateManager.getState();
 
-      // Only process if we have meaningful text
       if (!text.trim()) return [];
 
-      // Quick check for expense-like patterns
       const hasExpensePattern = /\$?\d+(\.\d{2})?/.test(text);
       if (!hasExpensePattern) return [];
 
-      // Initialize time context
       const now = new Date();
       const timeContext = {
         now,
@@ -438,29 +435,24 @@ export class ExpenseAgent {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       };
 
-      // Process through understanding phase
       const understanding = await this.understandingAgent.understand(
         text,
         state.messages,
         state.context.understanding
       );
 
-      // Add time context to understanding
       const understandingWithTime = {
         ...understanding,
         timeContext,
       };
 
-      // Only proceed if we detected an expense
       if (understanding.intent !== "add_expense") return [];
 
-      // Generate proposals with time context
       const proposals = await this.actionProposalAgent.proposeActions(
         text,
         understandingWithTime
       );
 
-      // Update state with new proposals
       this.stateManager.updateState({
         actionContext: {
           ...state.actionContext,
@@ -493,15 +485,13 @@ export class ExpenseAgent {
   }
 
   private deduplicateProposals(proposals: ActionProposal[]): ActionProposal[] {
-    const seen = new Map<string, ActionProposal>();
-
+    const uniqueProposals = new Map<string, ActionProposal>();
     proposals.forEach((proposal) => {
-      const key = `${proposal.parameters.amount}-${proposal.parameters.description}`;
-      if (!seen.has(key) || proposal.confidence > seen.get(key)!.confidence) {
-        seen.set(key, proposal);
+      const key = `${proposal.action}-${proposal.parameters.description}`;
+      if (!uniqueProposals.has(key)) {
+        uniqueProposals.set(key, proposal);
       }
     });
-
-    return Array.from(seen.values());
+    return Array.from(uniqueProposals.values());
   }
 }
