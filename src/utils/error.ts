@@ -43,24 +43,70 @@ export enum ErrorCodes {
   INVALID_TOOL_CALL = "INVALID_TOOL_CALL",
 }
 
-export class AgentError extends Error {
-  code: ErrorCodes;
-  details?: Record<string, any>;
+export enum ErrorSeverity {
+  LOW = "low",
+  MEDIUM = "medium",
+  HIGH = "high",
+  CRITICAL = "critical",
+}
+
+export interface ErrorMetadata {
+  timestamp: string;
+  severity: ErrorSeverity;
+  component: string;
+  originalError?: Error | unknown;
+  state?: Record<string, unknown>;
+  context?: Record<string, unknown>;
+  proposalId?: string;
+  proposalCount?: number;
+  action?: string;
+  messageCount?: number;
+  lastMessage?: string;
+  hasLastMessage?: boolean;
+  understanding?: unknown;
+  hasUnderstanding?: boolean;
+  currentStep?: string;
+  hasContext?: boolean;
+  hasActionContext?: boolean;
+  expense?: {
+    amount?: number;
+    description?: string;
+    category_id?: string;
+  };
+  category?: string;
+  description?: string;
+  providedParams?: string[];
+  input?: string;
+  response?: string;
+  rawResponse?: unknown;
+}
+
+export class ExpenseTrackerError extends Error {
+  readonly code: ErrorCodes;
+  readonly severity: ErrorSeverity;
+  readonly metadata: ErrorMetadata;
+  readonly isOperational: boolean;
 
   constructor(
     message: string,
     code: ErrorCodes,
-    details?: { originalError?: string; [key: string]: any }
+    severity: ErrorSeverity = ErrorSeverity.MEDIUM,
+    metadata: Partial<ErrorMetadata> = {},
+    isOperational = true
   ) {
     super(message);
-    this.name = "AgentError";
+    this.name = "ExpenseTrackerError";
     this.code = code;
-    this.details = details;
+    this.severity = severity;
+    this.isOperational = isOperational;
+    this.metadata = {
+      timestamp: new Date().toISOString(),
+      severity,
+      component: metadata.component || "unknown",
+      ...metadata,
+    };
 
-    // Maintain proper stack trace
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, AgentError);
-    }
+    Error.captureStackTrace(this, ExpenseTrackerError);
   }
 
   toJSON() {
@@ -68,8 +114,9 @@ export class AgentError extends Error {
       name: this.name,
       message: this.message,
       code: this.code,
-      details: this.details,
-      stack: this.stack,
+      severity: this.severity,
+      metadata: this.metadata,
+      stack: this.isOperational ? undefined : this.stack,
     };
   }
 }

@@ -1,10 +1,6 @@
-import type {
-  AgentState,
-  Message,
-  ExpenseContext,
-  ActionContext,
-} from "../types";
 import { EventEmitter } from "events";
+import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "../utils/error";
+import type { AgentState } from "../types";
 
 export class StateManager extends EventEmitter {
   private static instance: StateManager;
@@ -29,7 +25,15 @@ export class StateManager extends EventEmitter {
 
   getState(): AgentState {
     if (!this.state) {
-      throw new Error("State not initialized");
+      throw new ExpenseTrackerError(
+        "State not initialized",
+        ErrorCodes.INVALID_STATE,
+        ErrorSeverity.HIGH,
+        {
+          component: "StateManager",
+          context: { hasState: false },
+        }
+      );
     }
     return this.state;
   }

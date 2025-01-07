@@ -23,10 +23,11 @@ import type {
   CategorizeExpenseParams,
   ToolParameters,
 } from "../types";
-import { AgentError, ErrorCodes } from "../utils/error";
 import { config } from "../config";
 import { GraphStateManager } from "../utils/graphUtils";
 import { handleExpenseProposal } from "../index";
+import { LoggingService, LogLevel } from "../services/logging/LoggingService";
+import { ExpenseTrackerError, ErrorSeverity, ErrorCodes } from "../utils/error";
 
 // Define state annotation
 const StateAnnotation = Annotation.Root({
@@ -51,114 +52,195 @@ export class ExpenseAgent {
   private stateManager: StateManager;
   private actionProposalAgent: ActionProposalAgent;
   private understandingAgent: UnderstandingAgent;
+  private logger: LoggingService;
 
   constructor() {
     this.stateManager = StateManager.getInstance();
     this.actionProposalAgent = new ActionProposalAgent();
     this.understandingAgent = new UnderstandingAgent();
+    this.logger = LoggingService.getInstance();
+  }
+
+  private async handlePhaseError(
+    phase: string,
+    error: unknown,
+    context: Record<string, any>
+  ): Promise<never> {
+    let expenseError: ExpenseTrackerError;
+
+    if (error instanceof ExpenseTrackerError) {
+      expenseError = error;
+    } else {
+      const errorCode =
+        phase === "understanding"
+          ? ErrorCodes.UNDERSTANDING_FAILED
+          : phase === "thinking"
+          ? ErrorCodes.THINKING_FAILED
+          : phase === "acting"
+          ? ErrorCodes.ACTING_FAILED
+          : ErrorCodes.MESSAGE_PROCESSING_FAILED;
+
+      expenseError = new ExpenseTrackerError(
+        `Failed to process ${phase} phase`,
+        errorCode,
+        ErrorSeverity.HIGH,
+        {
+          component: `ExpenseAgent.${phase}`,
+          originalError: error instanceof Error ? error.message : String(error),
+          ...context,
+        }
+      );
+    }
+
+    this.logger.error(expenseError, "ExpenseAgent");
+    throw expenseError;
   }
 
   async processMessage(message: string): Promise<ActionProposal[]> {
     try {
-      console.log("Starting message processing...");
+      this.logger.log(
+        LogLevel.INFO,
+        "Starting message processing...",
+        "ExpenseAgent"
+      );
 
-      // Get instances of state managers
       const graphState = GraphStateManager.getInstance();
       let state = this.stateManager.getState();
 
-      // Reset state machine if we're in complete state
-      // This ensures we start fresh for each new message
       if (state.currentStep === "complete") {
         await graphState.transition("complete", "initial", {});
       }
 
-      // Add the new user message to conversation history
-      // This maintains the full context of the conversation
+      // Update state with new message
       this.stateManager.updateState({
         messages: [...state.messages, { role: "user", content: message }],
       });
 
-      // Get fresh state after message update
-      console.log("Processing through state machine...");
       state = this.stateManager.getState();
 
-      // Phase 1: Understanding
-      // Extract intent and key information from the message
-      console.log("Running understanding agent...");
-      state = await this.understand(state);
-      console.log("Understanding complete:", state.context.understanding);
-
-      // Phase 2: Thinking
-      // Generate action proposals based on understanding
-      console.log("Moving to thinking state...");
-      await graphState.transition("understanding", "thinking", {});
-      state = await this.think(state);
-
-      // Phase 3: Acting
-      // Prepare actions for execution
-      console.log("Moving to acting state...");
-      await graphState.transition("thinking", "acting", {});
-      state = await this.act(state);
-
-      // Complete the state machine cycle
-      console.log("Moving to complete state...");
-      await graphState.transition("acting", "complete", {});
-
-      // Return the generated proposals for possible execution
-      return state.actionContext.proposals;
-    } catch (error) {
-      // Log and wrap any errors that occur during processing
-      console.error("Error details:", error);
-
-      // Throw enhanced error with current state for debugging
-      throw new AgentError(
-        "Failed to process message",
-        ErrorCodes.MESSAGE_PROCESSING_FAILED,
+      this.logger.log(
+        LogLevel.DEBUG,
+        "Processing through state machine...",
+        "ExpenseAgent",
         {
-          originalError: error instanceof Error ? error.message : String(error),
-          state: this.stateManager.getState(),
+          currentStep: state.currentStep,
+          messageCount: state.messages.length,
         }
       );
+
+      // Phase transitions with enhanced error handling
+      try {
+        state = await this.understand(state);
+      } catch (error) {
+        await this.handlePhaseError("understanding", error, {
+          messageCount: state.messages.length,
+          lastMessage: message,
+        });
+      }
+
+      // Phase 2: Thinking
+      await graphState.transition("understanding", "thinking", {});
+
+      try {
+        state = await this.think(state);
+      } catch (error) {
+        await this.handlePhaseError("thinking", error, {
+          understanding: state.context.understanding,
+          messageCount: state.messages.length,
+        });
+      }
+
+      // Phase 3: Acting
+      await graphState.transition("thinking", "acting", {});
+
+      try {
+        state = await this.act(state);
+      } catch (error) {
+        await this.handlePhaseError("acting", error, {
+          proposals: state.actionContext.proposals,
+          currentStep: state.currentStep,
+        });
+      }
+
+      await graphState.transition("acting", "complete", {});
+
+      return state.actionContext.proposals;
+    } catch (error) {
+      let expenseError: ExpenseTrackerError;
+
+      if (error instanceof ExpenseTrackerError) {
+        expenseError = error;
+      } else {
+        const state = this.stateManager.getState();
+        expenseError = new ExpenseTrackerError(
+          "Failed to process message",
+          ErrorCodes.MESSAGE_PROCESSING_FAILED,
+          ErrorSeverity.HIGH,
+          {
+            component: "ExpenseAgent",
+            originalError:
+              error instanceof Error ? error.message : String(error),
+            state: {
+              currentStep: state.currentStep,
+              messageCount: state.messages.length,
+              hasContext: !!state.context,
+              hasActionContext: !!state.actionContext,
+            },
+          }
+        );
+      }
+
+      this.logger.error(expenseError, "ExpenseAgent");
+      throw expenseError;
     }
   }
 
   async processAcceptedActions(proposals: ActionProposal[]): Promise<void> {
     try {
-      // Filter out any proposals that weren't explicitly accepted by the user
       const acceptedProposals = proposals.filter(
         (p) => p.status === "accepted"
       );
 
-      // Early return if no proposals were accepted
       if (acceptedProposals.length === 0) return;
 
-      // Process each accepted proposal sequentially
+      this.logger.log(
+        LogLevel.INFO,
+        "Processing accepted actions",
+        "ExpenseAgent",
+        {
+          proposalCount: acceptedProposals.length,
+        }
+      );
+
       for (const proposal of acceptedProposals) {
         try {
-          // Route to different handlers based on action type
           switch (proposal.action) {
             case "add_expense":
-              // Execute the expense addition through ExpenseTools
               await ExpenseTools.addExpense(proposal.parameters);
+              this.logger.log(
+                LogLevel.INFO,
+                "Expense added successfully",
+                "ExpenseAgent",
+                {
+                  proposalId: proposal.id,
+                  action: proposal.action,
+                }
+              );
               break;
-            // Add other action types here as needed
-            // e.g., case "update_expense": ...
             default:
-              // Log warning for unknown action types
-              console.warn(`Unknown action type: ${proposal.action}`);
+              this.logger.log(
+                LogLevel.WARN,
+                `Unknown action type: ${proposal.action}`,
+                "ExpenseAgent"
+              );
           }
         } catch (actionError) {
-          // Log specific error for the failed action
-          console.error(
-            `Failed to process action ${proposal.action}:`,
-            actionError
-          );
-
-          // Wrap and rethrow with additional context about the specific action
-          throw new AgentError(
+          throw new ExpenseTrackerError(
             `Failed to process action ${proposal.action}`,
             ErrorCodes.ACTION_PROCESSING_FAILED,
+            ErrorSeverity.HIGH,
             {
+              component: "ExpenseAgent.processAcceptedActions",
               proposalId: proposal.id,
               action: proposal.action,
               originalError:
@@ -170,40 +252,51 @@ export class ExpenseAgent {
         }
       }
     } catch (error) {
-      // Log the overall processing error
-      console.error("Failed to process accepted actions:", error);
+      let expenseError: ExpenseTrackerError;
 
-      // Wrap and rethrow with general action processing error
-      throw new AgentError(
-        "Failed to process accepted actions",
-        ErrorCodes.ACTION_PROCESSING_FAILED,
-        {
-          originalError: error instanceof Error ? error.message : String(error),
-        }
-      );
+      if (error instanceof ExpenseTrackerError) {
+        expenseError = error;
+      } else {
+        expenseError = new ExpenseTrackerError(
+          "Failed to process accepted actions",
+          ErrorCodes.ACTION_PROCESSING_FAILED,
+          ErrorSeverity.HIGH,
+          {
+            component: "ExpenseAgent.processAcceptedActions",
+            originalError:
+              error instanceof Error ? error.message : String(error),
+            proposalCount: proposals.length,
+          }
+        );
+      }
+
+      this.logger.error(expenseError, "ExpenseAgent");
+      throw expenseError;
     }
   }
 
   private async understand(state: AgentState): Promise<AgentState> {
     try {
-      // Get the most recent message from the conversation history
       const lastMessage = state.messages[state.messages.length - 1];
 
-      // Validate that we have a message to process
       if (!lastMessage) {
-        throw new Error("No message found to understand");
+        throw new ExpenseTrackerError(
+          "No message found to understand",
+          ErrorCodes.VALIDATION_FAILED,
+          ErrorSeverity.MEDIUM,
+          {
+            component: "ExpenseAgent.understand",
+            messageCount: state.messages.length,
+            hasLastMessage: false,
+          }
+        );
       }
 
-      // Pass the message to the UnderstandingAgent for natural language processing
-      // This extracts key information like intent, amounts, dates, etc.
-      // The full message history is passed to maintain conversation context
       const understanding = await this.understandingAgent.understand(
         lastMessage.content,
         state.messages
       );
 
-      // Update the state with the new understanding
-      // We preserve existing context and merge in the new understanding
       this.stateManager.updateState({
         context: {
           ...state.context,
@@ -211,20 +304,19 @@ export class ExpenseAgent {
         },
       });
 
-      // Return the updated state for the next phase
       return this.stateManager.getState();
     } catch (error) {
-      // Log any errors that occur during understanding
-      console.error("Understanding error:", error);
-
-      // Wrap and rethrow the error with additional context
-      // This helps with debugging and error handling in higher levels
-      throw new AgentError(
+      throw new ExpenseTrackerError(
         "Failed to process understanding phase",
         ErrorCodes.UNDERSTANDING_FAILED,
+        ErrorSeverity.HIGH,
         {
+          component: "ExpenseAgent.understand",
           originalError: error instanceof Error ? error.message : String(error),
-          message: state.messages[state.messages.length - 1]?.content,
+          messageCount: state.messages.length,
+          hasLastMessage: !!state.messages[state.messages.length - 1],
+          currentStep: state.currentStep,
+          hasUnderstanding: !!state.context?.understanding,
         }
       );
     }
@@ -232,43 +324,56 @@ export class ExpenseAgent {
 
   private async think(state: AgentState): Promise<AgentState> {
     try {
-      console.log("Generating expense proposals...");
+      this.logger.log(
+        LogLevel.INFO,
+        "Generating expense proposals...",
+        "ExpenseAgent"
+      );
       const lastMessage = state.messages[state.messages.length - 1];
 
-      // Validate required context exists
       if (!lastMessage || !state.context.understanding) {
-        throw new Error("Missing required context for thinking phase");
+        throw new ExpenseTrackerError(
+          "Missing required context for thinking phase",
+          ErrorCodes.VALIDATION_FAILED,
+          ErrorSeverity.HIGH,
+          {
+            component: "ExpenseAgent.think",
+            hasLastMessage: !!lastMessage,
+            hasUnderstanding: !!state.context.understanding,
+          }
+        );
       }
 
-      // Initialize empty proposals array - will be populated based on intent
       let proposals: ActionProposal[] = [];
 
-      // Route to different handlers based on intent from understanding phase
       if (state.context.understanding.intent === "add_expense") {
-        // For expense-related intents, generate action proposals
         proposals = await this.actionProposalAgent.proposeActions(
           lastMessage.content,
           state.context.understanding
         );
-      } else if (state.context.understanding.intent === "need_clarification") {
-        // For unclear inputs, log the reason why clarification is needed
-        // This could be extended to generate clarifying questions
-        console.log(
-          "Clarification needed:",
-          state.context.understanding.clarificationReason
+        this.logger.log(
+          LogLevel.DEBUG,
+          "Generated expense proposals",
+          "ExpenseAgent",
+          {
+            proposalCount: proposals.length,
+          }
         );
+      } else if (state.context.understanding.intent === "need_clarification") {
+        this.logger.log(LogLevel.INFO, "Clarification needed", "ExpenseAgent", {
+          reason: state.context.understanding.clarificationReason,
+        });
       } else {
-        // Log other intents (get_insights, search, question) for future handling
-        // This could be extended to handle different types of queries
-        console.log(
-          "Non-expense intent detected:",
-          state.context.understanding.intent
+        this.logger.log(
+          LogLevel.INFO,
+          "Non-expense intent detected",
+          "ExpenseAgent",
+          {
+            intent: state.context.understanding.intent,
+          }
         );
       }
 
-      // Update the state with the results of the thinking phase
-      // Even if no proposals were generated, we still update the state
-      // to maintain the conversation context
       this.stateManager.updateState({
         actionContext: {
           ...state.actionContext,
@@ -277,36 +382,58 @@ export class ExpenseAgent {
         },
       });
 
-      // Return the updated state for the next phase
       return this.stateManager.getState();
     } catch (error) {
-      // Log and wrap any errors that occur during the thinking phase
-      console.error("Thinking error:", error);
-      throw new AgentError(
-        "Failed to process thinking phase",
-        ErrorCodes.THINKING_FAILED,
-        {
-          originalError: error instanceof Error ? error.message : String(error),
-          understanding: state.context.understanding,
-        }
-      );
+      let expenseError: ExpenseTrackerError;
+
+      if (error instanceof ExpenseTrackerError) {
+        expenseError = error;
+      } else {
+        expenseError = new ExpenseTrackerError(
+          "Failed to process thinking phase",
+          ErrorCodes.THINKING_FAILED,
+          ErrorSeverity.HIGH,
+          {
+            component: "ExpenseAgent.think",
+            originalError:
+              error instanceof Error ? error.message : String(error),
+            understanding: state.context.understanding,
+          }
+        );
+      }
+
+      this.logger.error(expenseError, "ExpenseAgent");
+      throw expenseError;
     }
   }
 
   private async act(state: AgentState): Promise<AgentState> {
     try {
-      // Just pass through the state for now
+      this.logger.log(LogLevel.DEBUG, "Starting act phase", "ExpenseAgent", {
+        proposalCount: state.actionContext.proposals.length,
+      });
       return state;
     } catch (error) {
-      console.error("Acting error:", error);
-      throw new AgentError(
-        "Failed to process acting phase",
-        ErrorCodes.ACTING_FAILED,
-        {
-          originalError: error instanceof Error ? error.message : String(error),
-          proposals: state.actionContext.proposals,
-        }
-      );
+      let expenseError: ExpenseTrackerError;
+
+      if (error instanceof ExpenseTrackerError) {
+        expenseError = error;
+      } else {
+        expenseError = new ExpenseTrackerError(
+          "Failed to process acting phase",
+          ErrorCodes.ACTING_FAILED,
+          ErrorSeverity.HIGH,
+          {
+            component: "ExpenseAgent.act",
+            originalError:
+              error instanceof Error ? error.message : String(error),
+            proposalCount: state.actionContext.proposals.length,
+          }
+        );
+      }
+
+      this.logger.error(expenseError, "ExpenseAgent");
+      throw expenseError;
     }
   }
 }

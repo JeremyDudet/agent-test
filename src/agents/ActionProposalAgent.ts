@@ -1,4 +1,6 @@
 import OpenAI from "openai";
+import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "../utils/error";
+import { LoggingService, LogLevel } from "../services/logging/LoggingService";
 import type {
   ActionProposal,
   Message,
@@ -15,13 +17,24 @@ export class ActionProposalAgent {
   private openai: OpenAI;
   private tavilyAPI: TavilyAPI;
   private stateManager: StateManager;
+  private logger: LoggingService;
 
   constructor() {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new ExpenseTrackerError(
+        "OpenAI API key not configured",
+        ErrorCodes.OPENAI_INITIALIZATION_FAILED,
+        ErrorSeverity.CRITICAL,
+        { component: "ActionProposalAgent" }
+      );
+    }
+
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
     this.tavilyAPI = new TavilyAPI();
     this.stateManager = StateManager.getInstance();
+    this.logger = LoggingService.getInstance();
   }
 
   private calculateDate(relativeDate: string): string {
@@ -58,41 +71,32 @@ export class ActionProposalAgent {
   private async researchExpense(description: string): Promise<string> {
     try {
       if (!process.env.TAVILY_API_KEY) {
-        console.log("Tavily API key not found, skipping research");
+        this.logger.log(
+          LogLevel.WARN,
+          "Tavily API key not found, skipping research",
+          "ActionProposalAgent"
+        );
         return "";
       }
 
       const searchResults = await this.tavilyAPI.search(
-        `${description} product service what is it used for`
+        `${description} expense category type`
       );
 
-      // Use GPT to analyze the search results
-      const completion = await this.openai.chat.completions.create({
-        model: "gpt-4-turbo-preview",
-        messages: [
-          {
-            role: "system",
-            content: `You are an AI that analyzes product/service information to help categorize expenses.
-                     Based on the search results, provide a concise summary of what this expense is for.
-                     Focus on: what it is, its primary purpose, and typical use cases.
-                     Keep the response under 100 words.`,
-          },
-          {
-            role: "user",
-            content: JSON.stringify(searchResults),
-          },
-        ],
-        temperature: 0.3,
-      });
-
-      const searchResultAnalysis =
-        completion.choices[0]?.message?.content || "";
-
-      console.log("Research Results: ", searchResultAnalysis);
-      return searchResultAnalysis;
+      return `Research Results: ${searchResults.results
+        .map((result) => result.content)
+        .join("\n")}`;
     } catch (error) {
-      console.error("Research failed:", error);
-      return ""; // Return empty string on failure
+      this.logger.log(
+        LogLevel.WARN,
+        "Research failed, continuing without research context",
+        "ActionProposalAgent",
+        {
+          description,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+      return "";
     }
   }
 
@@ -100,44 +104,145 @@ export class ActionProposalAgent {
     input: string,
     understanding: UnderstandingContext
   ): Promise<ActionProposal[]> {
-    // Get existing categories
-    const categories = await ExpenseTools.getCategories();
-    const categoryInfo = categories.map((c) => ({
-      name: c.name,
-      description: c.description || "No description available",
-    }));
+    try {
+      const { timeContext } = understanding;
 
-    let similarExpensesContext = "";
-    if (understanding?.description) {
+      // Get categories with error handling
+      let categoryInfo;
       try {
-        const similarExpenses = await ExpenseTools.getSimilarExpenses({
-          description: understanding.description,
-          limit: 3,
+        categoryInfo = await ExpenseTools.getCategories();
+      } catch (error) {
+        throw new ExpenseTrackerError(
+          "Failed to fetch expense categories",
+          ErrorCodes.TOOL_EXECUTION_FAILED,
+          ErrorSeverity.HIGH,
+          {
+            component: "ActionProposalAgent.proposeActions",
+            originalError:
+              error instanceof Error ? error.message : String(error),
+          }
+        );
+      }
+
+      // Get similar expenses with error handling
+      let similarExpensesContext = "";
+      if (understanding?.description) {
+        try {
+          const similarExpenses = await ExpenseTools.getSimilarExpenses({
+            description: understanding.description,
+            limit: 3,
+          });
+
+          if (similarExpenses?.results?.length > 0) {
+            similarExpensesContext =
+              "\nSimilar past expenses:\n" +
+              similarExpenses.results
+                .map(
+                  (exp: any) =>
+                    `- ${exp.description} ($${exp.amount}) categorized as ${exp.category}`
+                )
+                .join("\n");
+          }
+        } catch (error) {
+          this.logger.log(
+            LogLevel.WARN,
+            "Failed to fetch similar expenses",
+            "ActionProposalAgent",
+            {
+              description: understanding.description,
+              error: error instanceof Error ? error.message : String(error),
+            }
+          );
+        }
+      }
+
+      // Get research context if needed
+      const researchContext =
+        !similarExpensesContext && understanding?.description
+          ? await this.researchExpense(understanding.description)
+          : "";
+
+      // Call OpenAI API with error handling
+      try {
+        const completion = await this.openai.chat.completions.create({
+          model: "gpt-4-turbo-preview",
+          messages: [
+            {
+              role: "system",
+              content: this.constructPrompt(
+                timeContext,
+                categoryInfo,
+                similarExpensesContext,
+                researchContext
+              ),
+            },
+            {
+              role: "user",
+              content: `Please generate JSON proposals for the following input: ${input}`,
+            },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.2,
         });
 
-        if (similarExpenses?.results?.length > 0) {
-          similarExpensesContext =
-            "\nSimilar past expenses:\n" +
-            similarExpenses.results
-              .map(
-                (exp: any) =>
-                  `- ${exp.description} ($${exp.amount}) categorized as ${exp.category}`
-              )
-              .join("\n");
+        const content = completion.choices[0]?.message?.content;
+        if (!content) {
+          throw new ExpenseTrackerError(
+            "Empty response from OpenAI",
+            ErrorCodes.PROPOSAL_GENERATION_FAILED,
+            ErrorSeverity.HIGH,
+            {
+              component: "ActionProposalAgent.proposeActions",
+              input,
+            }
+          );
         }
+
+        return this.processOpenAIResponse(content, categoryInfo, input);
       } catch (error) {
-        console.error("Failed to fetch similar expenses:", error);
+        if (error instanceof ExpenseTrackerError) throw error;
+
+        throw new ExpenseTrackerError(
+          "Failed to generate proposals",
+          ErrorCodes.PROPOSAL_GENERATION_FAILED,
+          ErrorSeverity.HIGH,
+          {
+            component: "ActionProposalAgent.proposeActions",
+            originalError:
+              error instanceof Error ? error.message : String(error),
+            description: input,
+            context: { input },
+          }
+        );
       }
+    } catch (error) {
+      this.logger.error(
+        error instanceof ExpenseTrackerError
+          ? error
+          : new ExpenseTrackerError(
+              "Failed to propose actions",
+              ErrorCodes.PROPOSAL_GENERATION_FAILED,
+              ErrorSeverity.HIGH,
+              {
+                component: "ActionProposalAgent.proposeActions",
+                originalError:
+                  error instanceof Error ? error.message : String(error),
+                input,
+              }
+            ),
+        "ActionProposalAgent"
+      );
+      throw error;
     }
+  }
 
-    // Only do research if we have a description but no similar expenses
-    let researchContext = "";
-    if (understanding?.description && !similarExpensesContext) {
-      researchContext = await this.researchExpense(understanding.description);
-    }
-
-    // Construct the base prompt
-    const basePrompt = `You are an AI assistant that proposes concrete actions based on user input about expenses.
+  private constructPrompt(
+    timeContext: TimeContext,
+    categoryInfo: any[],
+    similarExpensesContext: string,
+    researchContext: string
+  ): string {
+    return `You are an AI assistant that proposes concrete actions based on user input about expenses.
 Your primary job is to detect when users mention spending money and create expense proposals.
 
 IMPORTANT: 
@@ -155,63 +260,26 @@ ${
     ? `\nSimilar past expenses for context:${similarExpensesContext}`
     : ""
 }
-${researchContext ? `\nAdditional research context:\n${researchContext}` : ""}
+${researchContext ? `\nAdditional research context:\n${researchContext}` : ""}`;
+  }
 
-When choosing categories:
-1. First, consider similar past expenses if available
-2. Then, use any research context to understand the expense type
-3. Match the expense purpose with the most specific available category
-4. If no category fits well, propose a new specific category
-
-You must respond with a JSON object in this exact format:
-{
-  "proposals": [{
-    "action": "add_expense",
-    "parameters": {
-      "amount": number,
-      "description": string,
-      "date": string,
-      "category": string,
-      "isNewCategory": boolean
-    },
-    "confidence": number,
-    "context": string,
-    "categoryReasoning": string  // Explain why this category was chosen or why a new category is needed
-  }]
-}`;
-
-    // Only use the most recent message for proposal generation
-    const messages: OpenAI.ChatCompletionMessageParam[] = [
-      {
-        role: "system",
-        content: basePrompt,
-      },
-      {
-        role: "user",
-        content: `Please generate JSON proposals for the following input: ${input}`,
-      },
-    ];
-
-    // Call the OpenAI API to generate proposals
-    const completion = await this.openai.chat.completions.create({
-      model: "gpt-4-turbo-preview",
-      messages,
-      response_format: { type: "json_object" },
-      temperature: 0.2,
-    });
-
-    // Process the response
-    const content = completion.choices[0]?.message?.content;
-    if (!content) {
-      return [];
-    }
-
-    console.log("OpenAI Response:", content);
+  private processOpenAIResponse(
+    content: string,
+    categoryInfo: any[],
+    originalInput: string
+  ): ActionProposal[] {
     try {
       const result = JSON.parse(content);
       if (!result.proposals || !Array.isArray(result.proposals)) {
-        console.error("Invalid response format:", result);
-        return [];
+        throw new ExpenseTrackerError(
+          "Invalid proposal format from OpenAI",
+          ErrorCodes.PROPOSAL_GENERATION_FAILED,
+          ErrorSeverity.HIGH,
+          {
+            component: "ActionProposalAgent.processOpenAIResponse",
+            rawResponse: content,
+          }
+        );
       }
 
       return result.proposals.map((proposal: any) => {
@@ -221,12 +289,11 @@ You must respond with a JSON object in this exact format:
           );
         }
 
-        // Find category ID if it's an existing category
         if (
           proposal.parameters?.category &&
           !proposal.parameters?.isNewCategory
         ) {
-          const category = categories.find(
+          const category = categoryInfo.find(
             (c) =>
               c.name.toLowerCase() ===
               proposal.parameters.category.toLowerCase()
@@ -248,12 +315,22 @@ You must respond with a JSON object in this exact format:
           context: proposal.context,
           followUp: proposal.followUp || [],
           status: "pending",
-          originalText: input,
+          originalText: originalInput,
         };
       });
     } catch (error) {
-      console.error("Failed to parse OpenAI response:", error);
-      return [];
+      if (error instanceof ExpenseTrackerError) throw error;
+
+      throw new ExpenseTrackerError(
+        "Failed to process OpenAI response",
+        ErrorCodes.PROPOSAL_GENERATION_FAILED,
+        ErrorSeverity.HIGH,
+        {
+          component: "ActionProposalAgent.processOpenAIResponse",
+          originalError: error instanceof Error ? error.message : String(error),
+          rawResponse: content,
+        }
+      );
     }
   }
 }

@@ -21,11 +21,15 @@
     "@langchain/openai": "^0.3.16",
     "@supabase/supabase-js": "^2.47.10",
     "@tavily/core": "^0.0.2",
+    "@types/tmp": "^0.2.6",
     "chalk": "^5.4.1",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
     "dotenv": "^16.4.7",
     "openai": "^4.77.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "tmp": "^0.2.3",
     "uuid": "^11.0.3"
   }
 }

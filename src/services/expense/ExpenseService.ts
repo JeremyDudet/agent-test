@@ -1,100 +1,185 @@
 import { format } from "date-fns";
 import type { ActionParameters } from "../../types";
 import { supabase } from "../database/supabase";
+import {
+  ExpenseTrackerError,
+  ErrorCodes,
+  ErrorSeverity,
+} from "../../utils/error";
+import { LoggingService, LogLevel } from "../logging/LoggingService";
 
 export class ExpenseTools {
+  private static logger = LoggingService.getInstance();
+
   static async addExpense(params: ActionParameters): Promise<any> {
     try {
+      // Validate required parameters
       if (!params.amount || !params.description || !params.category) {
-        throw new Error("Amount, description, and category are required");
+        throw new ExpenseTrackerError(
+          "Missing required expense parameters",
+          ErrorCodes.VALIDATION_FAILED,
+          ErrorSeverity.MEDIUM,
+          {
+            component: "ExpenseTools.addExpense",
+            providedParams: Object.keys(params),
+          }
+        );
       }
 
       const date = params.date ? new Date(params.date) : new Date();
 
-      // Generate embedding for the description
-      const { data: embedding } = await supabase.functions.invoke(
-        "generate-embedding",
-        {
-          body: { text: params.description },
-        }
-      );
+      // Generate embedding
+      try {
+        const { data: embedding, error: embeddingError } =
+          await supabase.functions.invoke("generate-embedding", {
+            body: { text: params.description },
+          });
 
-      if (!embedding) {
-        throw new Error("Failed to generate embedding for expense description");
-      }
-
-      // Handle category
-      let category_id = params.category_id;
-
-      // If it's a new category, throw a special error to trigger user confirmation
-      if (!category_id && params.isNewCategory) {
-        throw {
-          code: "NEEDS_CATEGORY_CONFIRMATION",
-          suggestedCategory: params.category,
-          reasoning: params.categoryReasoning,
-          originalParams: params,
-        };
-      }
-
-      // If we need to create a new category (after confirmation)
-      if (!category_id && params.category) {
-        const { data: newCategory, error: categoryError } = await supabase
-          .from("categories")
-          .insert({
-            name: params.category,
-            description:
-              params.categoryDescription || params.categoryReasoning || null,
-          })
-          .select("id")
-          .single();
-
-        if (categoryError) {
-          throw new Error(
-            `Failed to create category: ${categoryError.message}`
+        if (embeddingError || !embedding) {
+          throw new ExpenseTrackerError(
+            "Failed to generate embedding",
+            ErrorCodes.TOOL_EXECUTION_FAILED,
+            ErrorSeverity.MEDIUM,
+            {
+              component: "ExpenseTools.addExpense",
+              originalError: embeddingError?.message,
+              description: params.description,
+            }
           );
         }
-        category_id = newCategory.id;
+
+        // Handle category
+        let category_id = params.category_id;
+
+        // Handle new category suggestion
+        if (!category_id && params.isNewCategory) {
+          throw {
+            code: "NEEDS_CATEGORY_CONFIRMATION",
+            suggestedCategory: params.category,
+            reasoning: params.categoryReasoning,
+            originalParams: params,
+          };
+        }
+
+        // Create new category if needed
+        if (!category_id && params.category) {
+          const { data: newCategory, error: categoryError } = await supabase
+            .from("categories")
+            .insert({
+              name: params.category,
+              description:
+                params.categoryDescription || params.categoryReasoning || null,
+            })
+            .select("id")
+            .single();
+
+          if (categoryError) {
+            throw new ExpenseTrackerError(
+              "Failed to create category",
+              ErrorCodes.TOOL_EXECUTION_FAILED,
+              ErrorSeverity.HIGH,
+              {
+                component: "ExpenseTools.addExpense",
+                originalError: categoryError.message,
+                category: params.category,
+              }
+            );
+          }
+          category_id = newCategory.id;
+        }
+
+        const expense = {
+          id: crypto.randomUUID(),
+          amount: params.amount,
+          description: params.description,
+          category_id,
+          date: date.toISOString(),
+          merchant: params.merchant || null,
+          tags: params.tags || [],
+          metadata: params.metadata || {},
+          date_created: new Date().toISOString(),
+          description_embedding: embedding,
+        };
+
+        const { data, error } = await supabase
+          .from("expenses")
+          .insert(expense)
+          .select()
+          .single();
+
+        if (error) {
+          throw new ExpenseTrackerError(
+            "Failed to insert expense",
+            ErrorCodes.TOOL_EXECUTION_FAILED,
+            ErrorSeverity.HIGH,
+            {
+              component: "ExpenseTools.addExpense",
+              originalError: error.message,
+              expense: {
+                amount: expense.amount,
+                description: expense.description,
+                category_id: expense.category_id,
+              },
+            }
+          );
+        }
+
+        this.logger.log(
+          LogLevel.INFO,
+          "Successfully added expense",
+          "ExpenseTools.addExpense",
+          {
+            expenseId: data.id,
+            amount: data.amount,
+            category: data.category_id,
+          }
+        );
+
+        return data;
+      } catch (error) {
+        // Special handling for category confirmation
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "NEEDS_CATEGORY_CONFIRMATION"
+        ) {
+          throw error;
+        }
+
+        // Handle other errors
+        if (error instanceof ExpenseTrackerError) {
+          throw error;
+        }
+
+        throw new ExpenseTrackerError(
+          "Failed to add expense",
+          ErrorCodes.TOOL_EXECUTION_FAILED,
+          ErrorSeverity.HIGH,
+          {
+            component: "ExpenseTools.addExpense",
+            originalError:
+              error instanceof Error ? error.message : String(error),
+          }
+        );
       }
-
-      const expense = {
-        id: crypto.randomUUID(),
-        amount: params.amount,
-        description: params.description,
-        category_id,
-        date: date.toISOString(),
-        merchant: params.merchant || null,
-        tags: params.tags || [],
-        metadata: params.metadata || {},
-        date_created: new Date().toISOString(),
-        description_embedding: embedding, // Add the embedding to the expense record
-      };
-
-      const { data, error } = await supabase
-        .from("expenses")
-        .insert(expense)
-        .select()
-        .single();
-
-      if (error) {
-        throw new Error(`Database error: ${error.message}`);
-      }
-
-      return data;
     } catch (error) {
-      // Rethrow special category confirmation errors
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === "NEEDS_CATEGORY_CONFIRMATION"
-      ) {
-        throw error;
-      }
-      throw new Error(
-        `Failed to add expense: ${
-          error instanceof Error ? error.message : String(error)
-        }`
+      this.logger.error(
+        error instanceof ExpenseTrackerError
+          ? error
+          : new ExpenseTrackerError(
+              "Unexpected error in addExpense",
+              ErrorCodes.TOOL_EXECUTION_FAILED,
+              ErrorSeverity.CRITICAL,
+              {
+                component: "ExpenseTools.addExpense",
+                originalError:
+                  error instanceof Error ? error.message : String(error),
+              }
+            ),
+        "ExpenseTools"
       );
+      throw error;
     }
   }
 
