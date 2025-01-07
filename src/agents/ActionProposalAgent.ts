@@ -182,7 +182,7 @@ export class ActionProposalAgent {
             },
           ],
           response_format: { type: "json_object" },
-          temperature: 0.2,
+          temperature: 0,
         });
 
         const content = completion.choices[0]?.message?.content;
@@ -270,7 +270,44 @@ ${researchContext ? `\nAdditional research context:\n${researchContext}` : ""}`;
   ): ActionProposal[] {
     try {
       const result = JSON.parse(content);
-      if (!result.proposals || !Array.isArray(result.proposals)) {
+      let proposals: any[] = [];
+
+      // Handle different response formats
+      if (result.proposals && Array.isArray(result.proposals)) {
+        proposals = result.proposals;
+      } else if (result.action === "add_expense") {
+        // Handle single proposal format
+        proposals = [
+          {
+            action: "add_expense",
+            parameters: {
+              date: result.date,
+              amount: result.amount,
+              category: result.category,
+              description: result.description,
+            },
+            confidence: 1,
+            context: {},
+            followUp: [],
+          },
+        ];
+      } else if (result.add_expense) {
+        // Handle nested format
+        proposals = [
+          {
+            action: "add_expense",
+            parameters: {
+              date: result.add_expense.date,
+              amount: result.add_expense.amount,
+              category: result.add_expense.category,
+              description: result.add_expense.description,
+            },
+            confidence: 1,
+            context: {},
+            followUp: [],
+          },
+        ];
+      } else {
         throw new ExpenseTrackerError(
           "Invalid proposal format from OpenAI",
           ErrorCodes.PROPOSAL_GENERATION_FAILED,
@@ -282,7 +319,7 @@ ${researchContext ? `\nAdditional research context:\n${researchContext}` : ""}`;
         );
       }
 
-      return result.proposals.map((proposal: any) => {
+      return proposals.map((proposal: any) => {
         if (proposal.parameters?.date) {
           proposal.parameters.date = this.calculateDate(
             proposal.parameters.date
@@ -311,8 +348,8 @@ ${researchContext ? `\nAdditional research context:\n${researchContext}` : ""}`;
             categoryReasoning:
               proposal.categoryReasoning || "No category reasoning provided",
           },
-          confidence: proposal.confidence,
-          context: proposal.context,
+          confidence: proposal.confidence || 1,
+          context: proposal.context || {},
           followUp: proposal.followUp || [],
           status: "pending",
           originalText: originalInput,

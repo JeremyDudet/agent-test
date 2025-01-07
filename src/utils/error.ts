@@ -1,3 +1,5 @@
+import type { UnderstandingContext, ActionProposal } from "../types";
+
 export enum ErrorCodes {
   // State Management Errors
   INVALID_STATE = "INVALID_STATE",
@@ -18,6 +20,8 @@ export enum ErrorCodes {
   THINKING_FAILED = "THINKING_FAILED",
   ACTING_FAILED = "ACTING_FAILED",
   ACTION_PROCESSING_FAILED = "ACTION_PROCESSING_FAILED",
+  PARTIAL_PROCESSING_FAILED = "PARTIAL_PROCESSING_FAILED",
+  TRANSCRIPTION_FAILED = "TRANSCRIPTION_FAILED",
 
   // Tool Related Errors
   TOOL_PREPARATION_FAILED = "TOOL_PREPARATION_FAILED",
@@ -51,72 +55,37 @@ export enum ErrorSeverity {
 }
 
 export interface ErrorMetadata {
-  timestamp: string;
-  severity: ErrorSeverity;
   component: string;
-  originalError?: Error | unknown;
-  state?: Record<string, unknown>;
-  context?: Record<string, unknown>;
-  proposalId?: string;
-  proposalCount?: number;
-  action?: string;
+  originalError?: string;
+  transcriptionText?: string;
   messageCount?: number;
   lastMessage?: string;
-  hasLastMessage?: boolean;
-  understanding?: unknown;
-  hasUnderstanding?: boolean;
-  currentStep?: string;
-  hasContext?: boolean;
-  hasActionContext?: boolean;
-  expense?: {
-    amount?: number;
-    description?: string;
-    category_id?: string;
-  };
-  category?: string;
-  description?: string;
-  providedParams?: string[];
+  message?: string;
   input?: string;
-  response?: string;
-  rawResponse?: unknown;
+  understanding?: UnderstandingContext;
+  proposals?: ActionProposal[];
+  currentStep?: string;
+  [key: string]: any;
 }
 
 export class ExpenseTrackerError extends Error {
-  readonly code: ErrorCodes;
-  readonly severity: ErrorSeverity;
-  readonly metadata: ErrorMetadata;
-  readonly isOperational: boolean;
+  code: ErrorCodes;
+  severity: ErrorSeverity;
+  metadata: ErrorMetadata;
 
   constructor(
     message: string,
     code: ErrorCodes,
-    severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-    metadata: Partial<ErrorMetadata> = {},
-    isOperational = true
+    severity: ErrorSeverity,
+    metadata: Partial<ErrorMetadata>
   ) {
     super(message);
     this.name = "ExpenseTrackerError";
     this.code = code;
     this.severity = severity;
-    this.isOperational = isOperational;
     this.metadata = {
-      timestamp: new Date().toISOString(),
-      severity,
       component: metadata.component || "unknown",
       ...metadata,
-    };
-
-    Error.captureStackTrace(this, ExpenseTrackerError);
-  }
-
-  toJSON() {
-    return {
-      name: this.name,
-      message: this.message,
-      code: this.code,
-      severity: this.severity,
-      metadata: this.metadata,
-      stack: this.isOperational ? undefined : this.stack,
     };
   }
 }

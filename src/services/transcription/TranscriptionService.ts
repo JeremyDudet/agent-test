@@ -6,16 +6,20 @@ import { v4 as uuidv4 } from "uuid";
 import os from "os";
 import path from "path";
 import fs from "fs";
-
-interface TranscriptionEvents {
-  transcriptionComplete: (text: string) => void;
-  transcriptionError: (error: Error) => void;
-  transcriptionProgress: (progress: number) => void;
-}
+import { TranscriptionBufferManager } from "./TranscriptionBufferManager";
+import { LoggingService, LogLevel } from "../logging/LoggingService";
+import {
+  ExpenseTrackerError,
+  ErrorCodes,
+  ErrorSeverity,
+} from "../../utils/error";
 
 export class TranscriptionService extends EventEmitter {
   private openai: OpenAI;
   private tempDir: string;
+  private bufferManager: TranscriptionBufferManager;
+  private logger: LoggingService;
+  private accumulatedTranscript = "";
 
   constructor() {
     super();
@@ -23,78 +27,135 @@ export class TranscriptionService extends EventEmitter {
       apiKey: process.env.OPENAI_API_KEY,
     });
     this.tempDir = path.join(os.tmpdir(), "transcriptions");
+    this.bufferManager = new TranscriptionBufferManager();
+    this.logger = LoggingService.getInstance();
+
+    // Listen for buffer updates
+    this.bufferManager.on("bufferUpdated", (newText) => {
+      this.accumulatedTranscript += newText + " ";
+      this.emit("partialTranscript", newText);
+    });
   }
 
-  async transcribeAudioChunk(audioBuffer: ArrayBuffer): Promise<string> {
+  getAccumulatedTranscript(): string {
+    return this.accumulatedTranscript.trim();
+  }
+
+  clearAccumulatedTranscript(): void {
+    this.accumulatedTranscript = "";
+    this.bufferManager.clear();
+  }
+
+  // For single/partial chunks
+  async transcribeAudioChunk(
+    audioBuffer: ArrayBuffer,
+    isFinal = false
+  ): Promise<string> {
     try {
-      // Generate a temporary file path
+      if (audioBuffer.byteLength < 4000) {
+        this.logger.log(
+          LogLevel.DEBUG,
+          "Skipping short audio chunk",
+          "TranscriptionService",
+          { byteLength: audioBuffer.byteLength }
+        );
+        return "";
+      }
+
       const tempFilePath = path.join(this.tempDir, `${uuidv4()}.wav`);
-
-      // Write the audio buffer to a temporary file
       await writeFile(tempFilePath, Buffer.from(audioBuffer));
-
-      // Create a readable stream from the temporary file
       const audioStream = createReadStream(tempFilePath);
 
-      // Call Whisper API
+      // For partial transcripts, we can keep a lower temperature
+      // and rely on partial context from getLastPhrase
       const transcription = await this.openai.audio.transcriptions.create({
         file: audioStream,
         model: "whisper-1",
         language: "en",
         response_format: "text",
-      });
-
-      // Clean up the temporary file
-      await fs.promises.unlink(tempFilePath);
-
-      return transcription;
-    } catch (error) {
-      console.error("Transcription error:", error);
-      this.emit(
-        "transcriptionError",
-        error instanceof Error ? error : new Error(String(error))
-      );
-      throw error instanceof Error ? error : new Error(String(error));
-    }
-  }
-
-  async transcribeAudioComplete(audioBuffer: ArrayBuffer): Promise<string> {
-    try {
-      const tempFilePath = path.join(this.tempDir, `${uuidv4()}.wav`);
-      await writeFile(tempFilePath, Buffer.from(audioBuffer));
-      const audioStream = createReadStream(tempFilePath);
-
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: audioStream,
-        model: "whisper-1",
-        language: "en",
-        response_format: "text",
+        temperature: 0.3,
+        prompt: this.bufferManager.getLastPhrase(),
       });
 
       await fs.promises.unlink(tempFilePath);
-      this.emit("transcriptionComplete", transcription);
+
+      if (!transcription.trim()) {
+        return "";
+      }
+
+      if (isFinal) {
+        this.bufferManager.appendFinalTranscript(transcription);
+        this.logger.log(
+          LogLevel.INFO,
+          "Processed final transcript",
+          "TranscriptionService",
+          { transcript: transcription }
+        );
+      } else {
+        this.bufferManager.appendInterimTranscript(transcription);
+        this.logger.log(
+          LogLevel.DEBUG,
+          "Processed interim transcript",
+          "TranscriptionService",
+          { transcript: transcription }
+        );
+      }
+
       return transcription;
     } catch (error) {
-      console.error("Final transcription error:", error);
-      this.emit(
-        "transcriptionError",
-        error instanceof Error ? error : new Error(String(error))
+      this.logger.error(
+        new ExpenseTrackerError(
+          "Failed to transcribe audio chunk",
+          ErrorCodes.TRANSCRIPTION_FAILED,
+          ErrorSeverity.MEDIUM,
+          {
+            component: "TranscriptionService",
+            originalError:
+              error instanceof Error ? error.message : String(error),
+            isFinal,
+            bufferLength: this.bufferManager.getFullTranscript().length,
+          }
+        )
       );
       throw error;
     }
   }
 
-  public on<K extends keyof TranscriptionEvents>(
-    event: K,
-    listener: TranscriptionEvents[K]
-  ): this {
-    return super.on(event, listener);
-  }
+  // For the final, complete audio data
+  async transcribeFinalAudio(totalBuffer: Buffer): Promise<string> {
+    try {
+      const tempFilePath = path.join(this.tempDir, `${uuidv4()}.wav`);
+      await writeFile(tempFilePath, totalBuffer);
+      const audioStream = createReadStream(tempFilePath);
 
-  public emit<K extends keyof TranscriptionEvents>(
-    event: K,
-    ...args: Parameters<TranscriptionEvents[K]>
-  ): boolean {
-    return super.emit(event, ...args);
+      // This is a "best effort" final pass
+      const transcription = await this.openai.audio.transcriptions.create({
+        file: audioStream,
+        model: "whisper-1",
+        language: "en",
+        response_format: "text",
+        // You can also tune these parameters to reduce hallucination:
+        temperature: 0, // 0 is more deterministic
+        // no_speech_threshold, logprob_threshold, etc. (if supported by the library)
+      });
+
+      await fs.promises.unlink(tempFilePath);
+
+      return transcription.trim();
+    } catch (error) {
+      this.logger.error(
+        new ExpenseTrackerError(
+          "Failed to transcribe final audio",
+          ErrorCodes.TRANSCRIPTION_FAILED,
+          ErrorSeverity.MEDIUM,
+          {
+            component: "TranscriptionService.transcribeFinalAudio",
+            originalError:
+              error instanceof Error ? error.message : String(error),
+          }
+        )
+      );
+      throw error;
+    }
   }
 }

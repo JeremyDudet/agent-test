@@ -111,6 +111,14 @@ export class ExpenseAgent {
         await graphState.transition("complete", "initial", {});
       }
 
+      // Initialize time context
+      const now = new Date();
+      const timeContext = {
+        now,
+        formattedNow: now.toISOString().split("T")[0],
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
+
       // Update state with new message
       this.stateManager.updateState({
         messages: [...state.messages, { role: "user", content: message }],
@@ -118,80 +126,54 @@ export class ExpenseAgent {
 
       state = this.stateManager.getState();
 
-      this.logger.log(
-        LogLevel.DEBUG,
-        "Processing through state machine...",
-        "ExpenseAgent",
-        {
-          currentStep: state.currentStep,
-          messageCount: state.messages.length,
-        }
+      // Process through understanding phase
+      const understanding = await this.understandingAgent.understand(
+        message,
+        state.messages,
+        state.context.understanding
       );
 
-      // Phase transitions with enhanced error handling
-      try {
-        state = await this.understand(state);
-      } catch (error) {
-        await this.handlePhaseError("understanding", error, {
-          messageCount: state.messages.length,
-          lastMessage: message,
-        });
-      }
+      // Add time context to understanding
+      const understandingWithTime = {
+        ...understanding,
+        timeContext,
+      };
 
-      // Phase 2: Thinking
-      await graphState.transition("understanding", "thinking", {});
+      // Generate proposals with time context
+      const proposals = await this.actionProposalAgent.proposeActions(
+        message,
+        understandingWithTime
+      );
 
-      try {
-        state = await this.think(state);
-      } catch (error) {
-        await this.handlePhaseError("thinking", error, {
-          understanding: state.context.understanding,
-          messageCount: state.messages.length,
-        });
-      }
+      // Update state with new proposals
+      this.stateManager.updateState({
+        actionContext: {
+          ...state.actionContext,
+          proposals: this.deduplicateProposals([
+            ...state.actionContext.proposals,
+            ...proposals,
+          ]),
+        },
+      });
 
-      // Phase 3: Acting
-      await graphState.transition("thinking", "acting", {});
-
-      try {
-        state = await this.act(state);
-      } catch (error) {
-        await this.handlePhaseError("acting", error, {
-          proposals: state.actionContext.proposals,
-          currentStep: state.currentStep,
-        });
-      }
-
-      await graphState.transition("acting", "complete", {});
-
-      return state.actionContext.proposals;
+      return proposals;
     } catch (error) {
-      let expenseError: ExpenseTrackerError;
-
-      if (error instanceof ExpenseTrackerError) {
-        expenseError = error;
-      } else {
-        const state = this.stateManager.getState();
-        expenseError = new ExpenseTrackerError(
-          "Failed to process message",
-          ErrorCodes.MESSAGE_PROCESSING_FAILED,
-          ErrorSeverity.HIGH,
-          {
-            component: "ExpenseAgent",
-            originalError:
-              error instanceof Error ? error.message : String(error),
-            state: {
-              currentStep: state.currentStep,
-              messageCount: state.messages.length,
-              hasContext: !!state.context,
-              hasActionContext: !!state.actionContext,
-            },
-          }
-        );
-      }
-
-      this.logger.error(expenseError, "ExpenseAgent");
-      throw expenseError;
+      this.logger.error(
+        error instanceof ExpenseTrackerError
+          ? error
+          : new ExpenseTrackerError(
+              "Failed to process message",
+              ErrorCodes.MESSAGE_PROCESSING_FAILED,
+              ErrorSeverity.HIGH,
+              {
+                component: "ExpenseAgent.processMessage",
+                originalError:
+                  error instanceof Error ? error.message : String(error),
+                message,
+              }
+            )
+      );
+      throw error;
     }
   }
 
@@ -435,5 +417,91 @@ export class ExpenseAgent {
       this.logger.error(expenseError, "ExpenseAgent");
       throw expenseError;
     }
+  }
+
+  async processPartialTranscript(text: string): Promise<ActionProposal[]> {
+    try {
+      const state = this.stateManager.getState();
+
+      // Only process if we have meaningful text
+      if (!text.trim()) return [];
+
+      // Quick check for expense-like patterns
+      const hasExpensePattern = /\$?\d+(\.\d{2})?/.test(text);
+      if (!hasExpensePattern) return [];
+
+      // Initialize time context
+      const now = new Date();
+      const timeContext = {
+        now,
+        formattedNow: now.toISOString().split("T")[0],
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      };
+
+      // Process through understanding phase
+      const understanding = await this.understandingAgent.understand(
+        text,
+        state.messages,
+        state.context.understanding
+      );
+
+      // Add time context to understanding
+      const understandingWithTime = {
+        ...understanding,
+        timeContext,
+      };
+
+      // Only proceed if we detected an expense
+      if (understanding.intent !== "add_expense") return [];
+
+      // Generate proposals with time context
+      const proposals = await this.actionProposalAgent.proposeActions(
+        text,
+        understandingWithTime
+      );
+
+      // Update state with new proposals
+      this.stateManager.updateState({
+        actionContext: {
+          ...state.actionContext,
+          proposals: this.deduplicateProposals([
+            ...state.actionContext.proposals,
+            ...proposals,
+          ]),
+        },
+      });
+
+      return proposals;
+    } catch (error) {
+      this.logger.error(
+        error instanceof ExpenseTrackerError
+          ? error
+          : new ExpenseTrackerError(
+              "Failed to process partial transcript",
+              ErrorCodes.PARTIAL_PROCESSING_FAILED,
+              ErrorSeverity.MEDIUM,
+              {
+                component: "ExpenseAgent.processPartialTranscript",
+                originalError:
+                  error instanceof Error ? error.message : String(error),
+                transcriptionText: text,
+              }
+            )
+      );
+      return [];
+    }
+  }
+
+  private deduplicateProposals(proposals: ActionProposal[]): ActionProposal[] {
+    const seen = new Map<string, ActionProposal>();
+
+    proposals.forEach((proposal) => {
+      const key = `${proposal.parameters.amount}-${proposal.parameters.description}`;
+      if (!seen.has(key) || proposal.confidence > seen.get(key)!.confidence) {
+        seen.set(key, proposal);
+      }
+    });
+
+    return Array.from(seen.values());
   }
 }
