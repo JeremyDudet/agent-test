@@ -8,9 +8,9 @@ import { AIContextManager } from "./core/AIContextManager";
 import { mkdir } from "fs/promises";
 import { join } from "path";
 import os from "os";
-import { v4 as uuidv4 } from "uuid";
 import { LoggingService, LogLevel } from "./services/logging/LoggingService";
 import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "./utils/error";
+import { TranscriptionOrderManager } from "./services/transcription/TranscriptionOrderManager";
 
 config();
 
@@ -20,6 +20,7 @@ const logger = LoggingService.getInstance();
 const agent = new ExpenseAgent();
 const transcriptionService = new TranscriptionService();
 const aiContextManager = new AIContextManager();
+const transcriptionOrderManager = new TranscriptionOrderManager();
 
 // Initialize state
 stateManager.setState({
@@ -79,78 +80,102 @@ io.on("connection", async (socket) => {
     }
   });
 
-  socket.on("audioDataPartial", async (audioData: ArrayBuffer) => {
-    try {
-      const uint8Chunk = new Uint8Array(audioData);
-      userAudioBuffers[socket.id].push(uint8Chunk);
+  socket.on(
+    "audioDataPartial",
+    async (
+      data: {
+        audio: ArrayBuffer;
+        context: any;
+        sequenceId: number;
+        timestamp: number;
+      },
+      callback
+    ) => {
+      logger.log(LogLevel.DEBUG, "Received audio data", "SocketServer", {
+        sequenceId: data.sequenceId,
+        audioSize: data.audio.byteLength,
+      });
+      try {
+        const uint8Chunk = new Uint8Array(data.audio);
+        userAudioBuffers[socket.id].push(uint8Chunk);
 
-      // Get transcript from Whisper
-      const partialTranscript = await transcriptionService.transcribeAudioChunk(
-        audioData,
-        false
-      );
-      if (!partialTranscript.trim()) return;
+        // Get transcript from Whisper
+        const partialTranscript =
+          await transcriptionService.transcribeAudioChunk(data.audio, false);
 
-      socket.emit("interimTranscript", partialTranscript);
+        if (!partialTranscript.trim()) {
+          callback({ success: true, sequenceId: data.sequenceId });
+          return;
+        }
+
+        // Add to order manager
+        transcriptionOrderManager.addChunk(
+          data.sequenceId,
+          data.timestamp,
+          partialTranscript,
+          false
+        );
+
+        // Send immediate callback with transcription
+        callback({
+          success: true,
+          transcription: partialTranscript,
+          sequenceId: data.sequenceId,
+        });
+      } catch (error) {
+        const trackerError =
+          error instanceof ExpenseTrackerError
+            ? error
+            : new ExpenseTrackerError(
+                "Error processing partial audio",
+                ErrorCodes.PARTIAL_PROCESSING_FAILED,
+                ErrorSeverity.MEDIUM,
+                {
+                  component: "SocketServer.audioDataPartial",
+                  originalError:
+                    error instanceof Error ? error.message : String(error),
+                }
+              );
+
+        logger.error(trackerError, "SocketServer");
+        callback({
+          success: false,
+          error: trackerError.message,
+          sequenceId: data.sequenceId,
+        });
+      }
+    }
+  );
+
+  // Add transcription order manager event listener
+  transcriptionOrderManager.on(
+    "transcription",
+    async ({ transcript, completeTranscript, id }) => {
+      socket.emit("interimTranscript", {
+        partial: transcript,
+        complete: completeTranscript,
+      });
 
       // Process through AI Context Manager
-      await aiContextManager.processTranscript(socket.id, partialTranscript);
-    } catch (error) {
-      const trackerError =
-        error instanceof ExpenseTrackerError
-          ? error
-          : new ExpenseTrackerError(
-              "Error processing partial audio",
-              ErrorCodes.PARTIAL_PROCESSING_FAILED,
-              ErrorSeverity.MEDIUM,
-              {
-                component: "SocketServer.audioDataPartial",
-                originalError:
-                  error instanceof Error ? error.message : String(error),
-              }
-            );
-
-      logger.error(trackerError, "SocketServer");
-      socket.emit("error", {
-        message: trackerError.message,
-        details: trackerError.metadata,
-      });
+      await aiContextManager.processTranscript(socket.id, transcript);
     }
-  });
+  );
 
   socket.on("audioComplete", async () => {
     try {
-      const allChunks = Buffer.concat(userAudioBuffers[socket.id]);
-      userAudioBuffers[socket.id] = []; // clear buffer
-
-      const finalTranscript = await transcriptionService.transcribeFinalAudio(
-        allChunks
-      );
-      logger.log(LogLevel.INFO, "Audio complete", "SocketServer", {
-        finalTranscript,
-      });
+      // Clear the audio buffers since we don't need them anymore
+      userAudioBuffers[socket.id] = [];
 
       // Finalize the session in AI Context Manager
       await aiContextManager.finalizeSession(socket.id);
-
-      if (finalTranscript.length > 0) {
-        const proposals = await agent.processMessage(finalTranscript);
-        if (proposals.length > 0) {
-          socket.emit("proposals", {
-            proposals,
-            isPartial: false,
-            isFinal: true,
-          });
-        }
-      }
     } catch (error) {
       const trackerError =
         error instanceof ExpenseTrackerError
           ? error
           : new ExpenseTrackerError(
-              "Error completing audio",
+              "Error completing audio session",
               ErrorCodes.AUDIO_COMPLETION_FAILED,
-              ErrorSeverity.HIGH,
+              ErrorSeverity.MEDIUM,
               {
                 component: "SocketServer.audioComplete",
                 originalError:
