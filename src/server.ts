@@ -1,3 +1,4 @@
+// src/server.ts
 import { Server } from "socket.io";
 import { createServer } from "http";
 import { config } from "dotenv";
@@ -89,12 +90,9 @@ io.on("connection", async (socket) => {
         sequenceId: number;
         timestamp: number;
       },
-      callback
+      callback?: (response: any) => void
     ) => {
-      logger.log(LogLevel.DEBUG, "Received audio data", "SocketServer", {
-        sequenceId: data.sequenceId,
-        audioSize: data.audio.byteLength,
-      });
+      console.log(`🎤 Received audio chunk #${data.sequenceId} [${data.audio.byteLength} bytes] at ${new Date(data.timestamp).toISOString()}`);
       try {
         const uint8Chunk = new Uint8Array(data.audio);
         userAudioBuffers[socket.id].push(uint8Chunk);
@@ -104,7 +102,9 @@ io.on("connection", async (socket) => {
           await transcriptionService.transcribeAudioChunk(data.audio, false);
 
         if (!partialTranscript.trim()) {
-          callback({ success: true, sequenceId: data.sequenceId });
+          if (callback) {
+            callback({ success: true, sequenceId: data.sequenceId });
+          }
           return;
         }
 
@@ -116,12 +116,14 @@ io.on("connection", async (socket) => {
           false
         );
 
-        // Send immediate callback with transcription
-        callback({
-          success: true,
-          transcription: partialTranscript,
-          sequenceId: data.sequenceId,
-        });
+        // Send immediate callback with transcription if callback exists
+        if (callback) {
+          callback({
+            success: true,
+            transcription: partialTranscript,
+            sequenceId: data.sequenceId,
+          });
+        }
       } catch (error) {
         const trackerError =
           error instanceof ExpenseTrackerError
@@ -138,11 +140,15 @@ io.on("connection", async (socket) => {
               );
 
         logger.error(trackerError, "SocketServer");
-        callback({
-          success: false,
-          error: trackerError.message,
-          sequenceId: data.sequenceId,
-        });
+        
+        // Only call callback if it exists
+        if (callback) {
+          callback({
+            success: false,
+            error: trackerError.message,
+            sequenceId: data.sequenceId,
+          });
+        }
       }
     }
   );
