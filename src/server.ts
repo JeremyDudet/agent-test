@@ -1,4 +1,5 @@
 // src/server.ts
+
 import { Server } from "socket.io";
 import { createServer } from "http";
 import { config } from "dotenv";
@@ -56,18 +57,22 @@ io.on("connection", async (socket) => {
     socketId: socket.id,
   });
 
-  // Initialize AI Context Manager for this session
-  await aiContextManager.initializeSession(socket.id);
-  userAudioBuffers[socket.id] = [];
-
-  // Listen for context updates from AI Context Manager
-  aiContextManager.on("contextLoaded", ({ sessionId, analysis }) => {
+  // 1) Set up per-socket event listeners here
+  const handleContextLoaded = ({ sessionId, analysis }: any) => {
     if (sessionId === socket.id) {
       socket.emit("contextUpdate", { type: "historical", analysis });
     }
-  });
+  };
 
-  aiContextManager.on("semanticUnit", async ({ sessionId, text, context }) => {
+  const handleSemanticUnit = async ({
+    sessionId,
+    text,
+    context,
+  }: {
+    sessionId: string;
+    text: string;
+    context: any;
+  }) => {
     if (sessionId === socket.id) {
       // Process the semantic unit through the agent
       const proposals = await agent.processPartialTranscript(text);
@@ -79,8 +84,36 @@ io.on("connection", async (socket) => {
         });
       }
     }
-  });
+  };
 
+  const handleTranscription = async ({
+    transcript,
+    completeTranscript,
+    id,
+  }: {
+    transcript: string;
+    completeTranscript: string;
+    id: string;
+  }) => {
+    socket.emit("interimTranscript", {
+      partial: transcript,
+      complete: completeTranscript,
+    });
+
+    // Process through AI Context Manager
+    await aiContextManager.processTranscript(socket.id, transcript);
+  };
+
+  // 2) Attach these listeners to the managers
+  aiContextManager.on("contextLoaded", handleContextLoaded);
+  aiContextManager.on("semanticUnit", handleSemanticUnit);
+  transcriptionOrderManager.on("transcription", handleTranscription);
+
+  // Initialize AI Context Manager for this session
+  await aiContextManager.initializeSession(socket.id);
+  userAudioBuffers[socket.id] = [];
+
+  // Continue setting up your socket handlers
   socket.on(
     "audioDataPartial",
     async (
@@ -92,12 +125,16 @@ io.on("connection", async (socket) => {
       },
       callback?: (response: any) => void
     ) => {
-      console.log(`🎤 Received audio chunk #${data.sequenceId} [${data.audio.byteLength} bytes] at ${new Date(data.timestamp).toISOString()}`);
+      console.log(
+        `🎤 Received audio chunk #${data.sequenceId} [${
+          data.audio.byteLength
+        } bytes] at ${new Date(data.timestamp).toISOString()}`
+      );
       try {
         const uint8Chunk = new Uint8Array(data.audio);
         userAudioBuffers[socket.id].push(uint8Chunk);
 
-        // Get transcript from Whisper
+        // Transcribe partial audio
         const partialTranscript =
           await transcriptionService.transcribeAudioChunk(data.audio, false);
 
@@ -116,7 +153,7 @@ io.on("connection", async (socket) => {
           false
         );
 
-        // Send immediate callback with transcription if callback exists
+        // Send immediate callback with transcription
         if (callback) {
           callback({
             success: true,
@@ -140,8 +177,7 @@ io.on("connection", async (socket) => {
               );
 
         logger.error(trackerError, "SocketServer");
-        
-        // Only call callback if it exists
+
         if (callback) {
           callback({
             success: false,
@@ -153,23 +189,8 @@ io.on("connection", async (socket) => {
     }
   );
 
-  // Add transcription order manager event listener
-  transcriptionOrderManager.on(
-    "transcription",
-    async ({ transcript, completeTranscript, id }) => {
-      socket.emit("interimTranscript", {
-        partial: transcript,
-        complete: completeTranscript,
-      });
-
-      // Process through AI Context Manager
-      await aiContextManager.processTranscript(socket.id, transcript);
-    }
-  );
-
   socket.on("audioComplete", async () => {
     try {
-      // Clear the audio buffers since we don't need them anymore
       userAudioBuffers[socket.id] = [];
 
       // Finalize the session in AI Context Manager
@@ -197,10 +218,17 @@ io.on("connection", async (socket) => {
     }
   });
 
+  // 3) On disconnect, remove the listeners for this socket
   socket.on("disconnect", () => {
     logger.log(LogLevel.INFO, "Client disconnected", "SocketServer", {
       socketId: socket.id,
     });
+
+    // Remove only the listeners this socket added
+    aiContextManager.off("contextLoaded", handleContextLoaded);
+    aiContextManager.off("semanticUnit", handleSemanticUnit);
+    transcriptionOrderManager.off("transcription", handleTranscription);
+
     delete userAudioBuffers[socket.id];
   });
 });
