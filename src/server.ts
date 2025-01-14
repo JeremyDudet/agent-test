@@ -1,18 +1,18 @@
 // src/server.ts
 
+import os from "os";
 import { Server } from "socket.io";
 import { createServer } from "http";
-import { config } from "dotenv";
-import { ExpenseAgent } from "./core/Agent";
-import { TranscriptionService } from "./services/transcription/TranscriptionService";
-import { StateManager } from "./core/StateManager";
-import { AIContextManager } from "./core/AIContextManager";
 import { mkdir } from "fs/promises";
 import { join } from "path";
-import os from "os";
+import { config } from "dotenv";
+import { ExpenseAgent } from "./core/Agent";
+import { StateManager } from "./core/StateManager";
+import { AIContextManager } from "./core/AIContextManager";
+import { TranscriptionOrderManager } from "./services/transcription/TranscriptionOrderManager";
+import { TranscriptionService } from "./services/transcription/TranscriptionService";
 import { LoggingService, LogLevel } from "./services/logging/LoggingService";
 import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "./utils/error";
-import { TranscriptionOrderManager } from "./services/transcription/TranscriptionOrderManager";
 
 config();
 
@@ -113,31 +113,36 @@ io.on("connection", async (socket) => {
   await aiContextManager.initializeSession(socket.id);
   userAudioBuffers[socket.id] = [];
 
-  // Continue setting up your socket handlers
+  // This is the main handler for audio chunks coming in from the client
+  // It processes incoming audio data in chunks, transcribes them, and manages the transcription order
   socket.on(
     "audioDataPartial",
     async (
       data: {
-        audio: ArrayBuffer;
-        context: any;
-        sequenceId: number;
-        timestamp: number;
+        audio: ArrayBuffer; // Raw audio data buffer
+        context: any; // Additional context information
+        sequenceId: number; // Sequence number to maintain order
+        timestamp: number; // Timestamp when chunk was recorded
       },
-      callback?: (response: any) => void
+      callback?: (response: any) => void // Optional callback to send results back
     ) => {
+      // Log receipt of audio chunk with metadata
       console.log(
         `🎤 Received audio chunk #${data.sequenceId} [${
           data.audio.byteLength
         } bytes] at ${new Date(data.timestamp).toISOString()}`
       );
       try {
+        // Convert ArrayBuffer to Uint8Array and store in buffer
         const uint8Chunk = new Uint8Array(data.audio);
         userAudioBuffers[socket.id].push(uint8Chunk);
 
-        // Transcribe partial audio
+        // Attempt to transcribe the audio chunk
+        // The false parameter indicates this is a partial (not final) transcription
         const partialTranscript =
           await transcriptionService.transcribeAudioChunk(data.audio, false);
 
+        // If transcription is empty, send success callback and exit early
         if (!partialTranscript.trim()) {
           if (callback) {
             callback({ success: true, sequenceId: data.sequenceId });
@@ -145,7 +150,8 @@ io.on("connection", async (socket) => {
           return;
         }
 
-        // Add to order manager
+        // Add transcribed chunk to order manager to maintain sequence
+        // The false parameter indicates this is not the final chunk
         transcriptionOrderManager.addChunk(
           data.sequenceId,
           data.timestamp,
@@ -153,7 +159,7 @@ io.on("connection", async (socket) => {
           false
         );
 
-        // Send immediate callback with transcription
+        // Send successful transcription result back to client
         if (callback) {
           callback({
             success: true,
@@ -162,6 +168,8 @@ io.on("connection", async (socket) => {
           });
         }
       } catch (error) {
+        // Handle any errors during processing
+        // Convert generic errors to ExpenseTrackerError for consistent error handling
         const trackerError =
           error instanceof ExpenseTrackerError
             ? error
@@ -176,8 +184,10 @@ io.on("connection", async (socket) => {
                 }
               );
 
+        // Log the error
         logger.error(trackerError, "SocketServer");
 
+        // Send error information back to client
         if (callback) {
           callback({
             success: false,
