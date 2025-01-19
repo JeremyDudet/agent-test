@@ -10,7 +10,6 @@ interface TranscriptionChunk {
   id: number;
   timestamp: number;
   transcript: string;
-  isFinal: boolean;
 }
 
 export class TranscriptionOrderManager extends EventEmitter {
@@ -27,60 +26,51 @@ export class TranscriptionOrderManager extends EventEmitter {
     this.logger = LoggingService.getInstance();
   }
 
-  addChunk(
-    id: number,
-    timestamp: number,
-    transcript: string,
-    isFinal: boolean
-  ) {
-    this.chunks.set(id, { id, timestamp, transcript, isFinal });
-    this.processChunks();
+  // Add a chunk to the manager, this will trigger the processChunks method
+  addChunk(id: number, timestamp: number, transcript: string) {
+    console.log("Adding chunk", id, timestamp, transcript);
+    this.chunks.set(id, { id, timestamp, transcript }); // Add the chunk to the map
+    this.processChunks(); // Process the chunks
   }
 
-  private processChunks() {
+  private async processChunks() {
+    console.log("Processing chunks", this.chunks);
     while (this.chunks.has(this.nextExpectedId)) {
+      // While there are chunks to process
+      console.log("Processing chunk", this.nextExpectedId);
       const chunk = this.chunks.get(this.nextExpectedId)!;
 
-      // Add to complete transcript
-      this.completeTranscript += " " + chunk.transcript;
-      this.completeTranscript = this.completeTranscript.trim();
-
-      // Emit both the individual chunk and complete transcript
+      // Emit the individual chunk to the client
       this.emit("transcription", {
         transcript: chunk.transcript,
-        completeTranscript: this.completeTranscript,
         id: chunk.id,
         timestamp: chunk.timestamp,
       });
 
+      // // 2) Perform business logic against this chunk
+      // let result = null;
+      // try {
+      //   result = await this.generateProposalFromChunk(chunk.transcript);
+      //   console.log("Proposal Generator result", result);
+      // } catch (err) {
+      //   this.logger.error(err, "TranscriptionOrderManager");
+      //   // You might re-throw or handle error differently
+      // }
+
+      // console.log("Proposal Generator result", result);
+
+      // // If the result is a proposal, emit it to the client
+      // if (result.type === "proposal") {
+      //   this.emit("proposals", {
+      //     proposals: [result],
+      //     isPartial: false,
+      //     context: {},
+      //   });
+      // }
+
       // Clean up processed chunk
       this.chunks.delete(this.nextExpectedId);
       this.nextExpectedId++;
-    }
-
-    this.handleTimedOutChunks();
-  }
-
-  private handleTimedOutChunks() {
-    const now = Date.now();
-    const timedOutIds: number[] = [];
-
-    this.chunks.forEach((chunk, id) => {
-      if (now - chunk.timestamp > this.CHUNK_TIMEOUT) {
-        timedOutIds.push(id);
-        this.logger.log(
-          LogLevel.WARN,
-          "Transcription chunk timed out",
-          "TranscriptionOrderManager",
-          { chunkId: id }
-        );
-      }
-    });
-
-    // Skip timed-out chunks if they're blocking progress
-    if (timedOutIds.includes(this.nextExpectedId)) {
-      this.nextExpectedId++;
-      this.processChunks();
     }
   }
 

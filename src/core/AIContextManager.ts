@@ -220,4 +220,8 @@ export class AIContextManager extends EventEmitter {
       );
     }
   }
+
+  public getSessionConfidence(sessionId: string): number {
+    return this.sessionContext.get(sessionId)?.confidence || 0;
+  }
 }

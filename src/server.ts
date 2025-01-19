@@ -13,6 +13,7 @@ import { TranscriptionOrderManager } from "./services/transcription/Transcriptio
 import { TranscriptionService } from "./services/transcription/TranscriptionService";
 import { LoggingService, LogLevel } from "./services/logging/LoggingService";
 import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "./utils/error";
+import type { ActionProposal } from "./types";
 
 config();
 
@@ -86,37 +87,32 @@ io.on("connection", async (socket) => {
     }
   };
 
-  const handleTranscription = async ({
-    transcript,
-    completeTranscript,
-    id,
+  const handleProposal = async ({
+    proposal,
+    context,
   }: {
-    transcript: string;
-    completeTranscript: string;
-    id: string;
+    proposal: ActionProposal;
+    context: any;
   }) => {
-    socket.emit("interimTranscript", {
-      partial: transcript,
-      complete: completeTranscript,
+    socket.emit("proposals", {
+      proposals: [proposal],
+      isPartial: false,
+      context,
     });
-
-    // Process through AI Context Manager
-    await aiContextManager.processTranscript(socket.id, transcript);
   };
 
   // 2) Attach these listeners to the managers
   aiContextManager.on("contextLoaded", handleContextLoaded);
   aiContextManager.on("semanticUnit", handleSemanticUnit);
-  transcriptionOrderManager.on("transcription", handleTranscription);
+  transcriptionOrderManager.on("proposals", handleProposal);
 
   // Initialize AI Context Manager for this session
   await aiContextManager.initializeSession(socket.id);
   userAudioBuffers[socket.id] = [];
 
   // This is the main handler for audio chunks coming in from the client
-  // It processes incoming audio data in chunks, transcribes them, and manages the transcription order
   socket.on(
-    "audioDataPartial",
+    "audioData",
     async (
       data: {
         audio: ArrayBuffer; // Raw audio data buffer
@@ -139,11 +135,13 @@ io.on("connection", async (socket) => {
 
         // Attempt to transcribe the audio chunk
         // The false parameter indicates this is a partial (not final) transcription
-        const partialTranscript =
-          await transcriptionService.transcribeAudioChunk(data.audio, false);
+        const transcript = await transcriptionService.transcribeAudioChunk(
+          data.audio,
+          false
+        );
 
         // If transcription is empty, send success callback and exit early
-        if (!partialTranscript.trim()) {
+        if (!transcript.trim()) {
           if (callback) {
             callback({ success: true, sequenceId: data.sequenceId });
           }
@@ -155,15 +153,14 @@ io.on("connection", async (socket) => {
         transcriptionOrderManager.addChunk(
           data.sequenceId,
           data.timestamp,
-          partialTranscript,
-          false
+          transcript
         );
 
         // Send successful transcription result back to client
         if (callback) {
           callback({
             success: true,
-            transcription: partialTranscript,
+            transcription: transcript,
             sequenceId: data.sequenceId,
           });
         }
@@ -237,8 +234,7 @@ io.on("connection", async (socket) => {
     // Remove only the listeners this socket added
     aiContextManager.off("contextLoaded", handleContextLoaded);
     aiContextManager.off("semanticUnit", handleSemanticUnit);
-    transcriptionOrderManager.off("transcription", handleTranscription);
-
+    transcriptionOrderManager.off("proposals", handleProposal);
     delete userAudioBuffers[socket.id];
   });
 });
