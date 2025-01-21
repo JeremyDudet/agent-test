@@ -1,6 +1,5 @@
 import OpenAI from "openai";
 import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "../utils/error";
-import { LoggingService, LogLevel } from "../services/logging/LoggingService";
 import type {
   ActionProposal,
   Message,
@@ -9,7 +8,7 @@ import type {
 } from "../types";
 import { v4 as uuidv4 } from "uuid";
 import { subMonths, subDays } from "date-fns";
-import { ExpenseTools } from "../services/expense/ExpenseService";
+import { ExpenseService } from "../services/expense/ExpenseService";
 import { TavilyAPI } from "../services/search/TavilyAPI";
 import { StateManager } from "../core/StateManager";
 
@@ -17,7 +16,6 @@ export class ActionProposalAgent {
   private openai: OpenAI;
   private tavilyAPI: TavilyAPI;
   private stateManager: StateManager;
-  private logger: LoggingService;
 
   constructor() {
     if (!process.env.OPENAI_API_KEY) {
@@ -34,7 +32,6 @@ export class ActionProposalAgent {
     });
     this.tavilyAPI = new TavilyAPI();
     this.stateManager = StateManager.getInstance();
-    this.logger = LoggingService.getInstance();
   }
 
   private calculateDate(relativeDate: string): string {
@@ -71,8 +68,7 @@ export class ActionProposalAgent {
   private async researchExpense(description: string): Promise<string> {
     try {
       if (!process.env.TAVILY_API_KEY) {
-        this.logger.log(
-          LogLevel.WARN,
+        console.log(
           "Tavily API key not found, skipping research",
           "ActionProposalAgent"
         );
@@ -87,8 +83,7 @@ export class ActionProposalAgent {
         .map((result) => result.content)
         .join("\n")}`;
     } catch (error) {
-      this.logger.log(
-        LogLevel.WARN,
+      console.log(
         "Research failed, continuing without research context",
         "ActionProposalAgent",
         {
@@ -110,7 +105,7 @@ export class ActionProposalAgent {
       // Get categories with error handling
       let categoryInfo;
       try {
-        categoryInfo = await ExpenseTools.getCategories();
+        categoryInfo = await ExpenseService.getCategories();
       } catch (error) {
         throw new ExpenseTrackerError(
           "Failed to fetch expense categories",
@@ -128,7 +123,7 @@ export class ActionProposalAgent {
       let similarExpensesContext = "";
       if (understanding?.description) {
         try {
-          const similarExpenses = await ExpenseTools.getSimilarExpenses({
+          const similarExpenses = await ExpenseService.getSimilarExpenses({
             description: understanding.description,
             limit: 3,
           });
@@ -144,8 +139,7 @@ export class ActionProposalAgent {
                 .join("\n");
           }
         } catch (error) {
-          this.logger.log(
-            LogLevel.WARN,
+          console.log(
             "Failed to fetch similar expenses",
             "ActionProposalAgent",
             {
@@ -216,7 +210,7 @@ export class ActionProposalAgent {
         );
       }
     } catch (error) {
-      this.logger.error(
+      console.error(
         error instanceof ExpenseTrackerError
           ? error
           : new ExpenseTrackerError(

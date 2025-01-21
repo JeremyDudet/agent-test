@@ -6,11 +6,9 @@ import {
   ErrorCodes,
   ErrorSeverity,
 } from "../../utils/error";
-import { LoggingService, LogLevel } from "../logging/LoggingService";
+import type { ExpenseCategory } from "../../core/StateManager";
 
-export class ExpenseTools {
-  private static logger = LoggingService.getInstance();
-
+export class ExpenseService {
   static async addExpense(params: ActionParameters): Promise<any> {
     try {
       // Validate required parameters
@@ -124,17 +122,6 @@ export class ExpenseTools {
           );
         }
 
-        this.logger.log(
-          LogLevel.INFO,
-          "Successfully added expense",
-          "ExpenseTools.addExpense",
-          {
-            expenseId: data.id,
-            amount: data.amount,
-            category: data.category_id,
-          }
-        );
-
         return data;
       } catch (error) {
         // Special handling for category confirmation
@@ -164,21 +151,6 @@ export class ExpenseTools {
         );
       }
     } catch (error) {
-      this.logger.error(
-        error instanceof ExpenseTrackerError
-          ? error
-          : new ExpenseTrackerError(
-              "Unexpected error in addExpense",
-              ErrorCodes.TOOL_EXECUTION_FAILED,
-              ErrorSeverity.CRITICAL,
-              {
-                component: "ExpenseTools.addExpense",
-                originalError:
-                  error instanceof Error ? error.message : String(error),
-              }
-            ),
-        "ExpenseTools"
-      );
       throw error;
     }
   }
@@ -285,9 +257,7 @@ export class ExpenseTools {
     }
   }
 
-  static async getCategories(): Promise<
-    { id: string; name: string; description: string }[]
-  > {
+  static async getCategories(): Promise<ExpenseCategory[]> {
     try {
       const { data, error } = await supabase
         .from("categories")

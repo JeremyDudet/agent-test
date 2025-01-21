@@ -8,10 +8,8 @@ import { join } from "path";
 import { config } from "dotenv";
 import { ExpenseAgent } from "./core/Agent";
 import { StateManager } from "./core/StateManager";
-import { AIContextManager } from "./core/AIContextManager";
 import { TranscriptionOrderManager } from "./services/transcription/TranscriptionOrderManager";
 import { TranscriptionService } from "./services/transcription/TranscriptionService";
-import { LoggingService, LogLevel } from "./services/logging/LoggingService";
 import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "./utils/error";
 import type { ActionProposal } from "./types";
 
@@ -19,31 +17,39 @@ config();
 
 // Initialize services
 const stateManager = StateManager.getInstance();
-const logger = LoggingService.getInstance();
 const agent = new ExpenseAgent();
-const transcriptionService = new TranscriptionService();
-const aiContextManager = new AIContextManager();
-const transcriptionOrderManager = new TranscriptionOrderManager();
+const transcriptionService = new TranscriptionService(); // orchestrator for the transcription process
+const transcriptionOrderManager = new TranscriptionOrderManager(); // maintains the order of the transcription chunks
 
 // Initialize state
 stateManager.setState({
-  messages: [],
-  context: {},
+  isProcessing: false,
+  messageWindow: {
+    processedMessages: [],
+    newMessages: [],
+    windowSize: 20,
+  },
+  existingProposals: [],
   currentStep: "initial",
-  toolCalls: [],
   actionContext: {
     proposals: [],
     currentInput: "",
     isProcessing: false,
   },
+  toolCalls: [],
 });
 
 const httpServer = createServer();
 const io = new Server(httpServer, {
+  transports: ["websocket"],
   cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: process.env.FRONTEND_URL,
     methods: ["GET", "POST"],
+    credentials: true,
   },
+  allowEIO3: true,
+  pingInterval: 25000, // 25 seconds - How often to send a ping
+  pingTimeout: 60000, // 60 seconds - How long to wait for a pong response
 });
 
 // Create the transcriptions temp directory
@@ -52,62 +58,13 @@ await mkdir(tempDir, { recursive: true });
 
 // Store partial chunks as Uint8Array
 const userAudioBuffers: Record<string, Uint8Array[]> = {};
+3;
 
 io.on("connection", async (socket) => {
-  logger.log(LogLevel.INFO, "Client connected", "SocketServer", {
+  console.log("Client connected", "SocketServer", {
     socketId: socket.id,
   });
 
-  // 1) Set up per-socket event listeners here
-  const handleContextLoaded = ({ sessionId, analysis }: any) => {
-    if (sessionId === socket.id) {
-      socket.emit("contextUpdate", { type: "historical", analysis });
-    }
-  };
-
-  const handleSemanticUnit = async ({
-    sessionId,
-    text,
-    context,
-  }: {
-    sessionId: string;
-    text: string;
-    context: any;
-  }) => {
-    if (sessionId === socket.id) {
-      // Process the semantic unit through the agent
-      const proposals = await agent.processPartialTranscript(text);
-      if (proposals.length > 0) {
-        socket.emit("proposals", {
-          proposals,
-          isPartial: true,
-          context,
-        });
-      }
-    }
-  };
-
-  const handleProposal = async ({
-    proposal,
-    context,
-  }: {
-    proposal: ActionProposal;
-    context: any;
-  }) => {
-    socket.emit("proposals", {
-      proposals: [proposal],
-      isPartial: false,
-      context,
-    });
-  };
-
-  // 2) Attach these listeners to the managers
-  aiContextManager.on("contextLoaded", handleContextLoaded);
-  aiContextManager.on("semanticUnit", handleSemanticUnit);
-  transcriptionOrderManager.on("proposals", handleProposal);
-
-  // Initialize AI Context Manager for this session
-  await aiContextManager.initializeSession(socket.id);
   userAudioBuffers[socket.id] = [];
 
   // This is the main handler for audio chunks coming in from the client
@@ -133,14 +90,12 @@ io.on("connection", async (socket) => {
         const uint8Chunk = new Uint8Array(data.audio);
         userAudioBuffers[socket.id].push(uint8Chunk);
 
-        // Attempt to transcribe the audio chunk
-        // The false parameter indicates this is a partial (not final) transcription
+        // transcribe the audio chunk
         const transcript = await transcriptionService.transcribeAudioChunk(
-          data.audio,
-          false
+          data.audio
         );
 
-        // If transcription is empty, send success callback and exit early
+        // if transcription is empty, send success callback and exit early
         if (!transcript.trim()) {
           if (callback) {
             callback({ success: true, sequenceId: data.sequenceId });
@@ -148,15 +103,15 @@ io.on("connection", async (socket) => {
           return;
         }
 
-        // Add transcribed chunk to order manager to maintain sequence
-        // The false parameter indicates this is not the final chunk
+        // add transcribed chunk to order manager to maintain sequence
+        // the false parameter indicates this is not the final chunk
         transcriptionOrderManager.addChunk(
           data.sequenceId,
           data.timestamp,
           transcript
         );
 
-        // Send successful transcription result back to client
+        // send successful transcription result back to client
         if (callback) {
           callback({
             success: true,
@@ -165,8 +120,8 @@ io.on("connection", async (socket) => {
           });
         }
       } catch (error) {
-        // Handle any errors during processing
-        // Convert generic errors to ExpenseTrackerError for consistent error handling
+        // handle any errors during processing
+        // convert generic errors to ExpenseTrackerError for consistent error handling
         const trackerError =
           error instanceof ExpenseTrackerError
             ? error
@@ -182,7 +137,7 @@ io.on("connection", async (socket) => {
               );
 
         // Log the error
-        logger.error(trackerError, "SocketServer");
+        console.error(trackerError, "SocketServer");
 
         // Send error information back to client
         if (callback) {
@@ -198,10 +153,8 @@ io.on("connection", async (socket) => {
 
   socket.on("audioComplete", async () => {
     try {
+      // Reset the audio buffer for this socket ID when audio recording is complete
       userAudioBuffers[socket.id] = [];
-
-      // Finalize the session in AI Context Manager
-      await aiContextManager.finalizeSession(socket.id);
     } catch (error) {
       const trackerError =
         error instanceof ExpenseTrackerError
@@ -216,8 +169,7 @@ io.on("connection", async (socket) => {
                   error instanceof Error ? error.message : String(error),
               }
             );
-
-      logger.error(trackerError, "SocketServer");
+      console.error(trackerError, "SocketServer");
       socket.emit("error", {
         message: trackerError.message,
         details: trackerError.metadata,
@@ -227,19 +179,15 @@ io.on("connection", async (socket) => {
 
   // 3) On disconnect, remove the listeners for this socket
   socket.on("disconnect", () => {
-    logger.log(LogLevel.INFO, "Client disconnected", "SocketServer", {
+    console.log("Client disconnected", "SocketServer", {
       socketId: socket.id,
     });
 
-    // Remove only the listeners this socket added
-    aiContextManager.off("contextLoaded", handleContextLoaded);
-    aiContextManager.off("semanticUnit", handleSemanticUnit);
-    transcriptionOrderManager.off("proposals", handleProposal);
     delete userAudioBuffers[socket.id];
   });
 });
 
 const port = process.env.PORT || 3001;
 httpServer.listen(port, () => {
-  logger.log(LogLevel.INFO, `Server running on port ${port}`, "SocketServer");
+  console.log(`Server running on port ${port}`, "SocketServer");
 });

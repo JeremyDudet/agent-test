@@ -6,7 +6,6 @@ import { v4 as uuidv4 } from "uuid";
 import os from "os";
 import path from "path";
 import fs from "fs";
-import { LoggingService, LogLevel } from "../logging/LoggingService";
 import {
   ExpenseTrackerError,
   ErrorCodes,
@@ -16,7 +15,6 @@ import {
 export class TranscriptionService extends EventEmitter {
   private openai: OpenAI;
   private tempDir: string;
-  private logger: LoggingService;
   private readonly MIN_CHUNK_SIZE = 4000;
   private readonly MAX_RETRIES = 3;
   private readonly RETRY_DELAY = 1000; // ms
@@ -27,70 +25,9 @@ export class TranscriptionService extends EventEmitter {
       apiKey: process.env.OPENAI_API_KEY,
     });
     this.tempDir = path.join(os.tmpdir(), "transcriptions");
-    this.logger = LoggingService.getInstance();
   }
 
-  async transcribeAudioChunk(
-    audioBuffer: ArrayBuffer,
-    isFinal = false
-  ): Promise<string> {
-    try {
-      if (audioBuffer.byteLength < this.MIN_CHUNK_SIZE) {
-        this.logger.log(
-          LogLevel.DEBUG,
-          "Skipping short audio chunk",
-          "TranscriptionService",
-          { byteLength: audioBuffer.byteLength }
-        );
-        return "";
-      }
-
-      const tempFilePath = path.join(this.tempDir, `${uuidv4()}.wav`);
-      await this.writeAudioFile(tempFilePath, audioBuffer);
-
-      const transcription = await this.retryTranscription(
-        tempFilePath,
-        isFinal
-      );
-
-      await this.cleanup(tempFilePath);
-      return transcription.trim();
-    } catch (error) {
-      throw new ExpenseTrackerError(
-        "Failed to transcribe audio chunk",
-        ErrorCodes.TRANSCRIPTION_FAILED,
-        ErrorSeverity.MEDIUM,
-        {
-          component: "TranscriptionService.transcribeAudioChunk",
-          originalError: error instanceof Error ? error.message : String(error),
-          isFinal,
-        }
-      );
-    }
-  }
-
-  async transcribeFinalAudio(totalBuffer: Buffer): Promise<string> {
-    try {
-      const tempFilePath = path.join(this.tempDir, `${uuidv4()}.wav`);
-      await this.writeAudioFile(tempFilePath, totalBuffer);
-
-      const transcription = await this.retryTranscription(tempFilePath, true);
-
-      await this.cleanup(tempFilePath);
-      return transcription.trim();
-    } catch (error) {
-      throw new ExpenseTrackerError(
-        "Failed to transcribe final audio",
-        ErrorCodes.TRANSCRIPTION_FAILED,
-        ErrorSeverity.HIGH,
-        {
-          component: "TranscriptionService.transcribeFinalAudio",
-          originalError: error instanceof Error ? error.message : String(error),
-        }
-      );
-    }
-  }
-
+  // write audio to temporary file
   private async writeAudioFile(
     filePath: string,
     audioData: ArrayBuffer | Buffer
@@ -122,12 +59,11 @@ export class TranscriptionService extends EventEmitter {
     }
   }
 
-  private async retryTranscription(
-    filePath: string,
-    isFinal: boolean
-  ): Promise<string> {
+  // transcribe audio with OpenAI Whisper API
+  private async transcribe(filePath: string): Promise<string> {
     let lastError: Error | null = null;
 
+    // try to transcribe the audio file up to MAX_RETRIES times
     for (let attempt = 1; attempt <= this.MAX_RETRIES; attempt++) {
       try {
         const audioStream = createReadStream(filePath);
@@ -137,16 +73,11 @@ export class TranscriptionService extends EventEmitter {
           model: "whisper-1",
           language: "en",
           response_format: "text",
-          temperature: isFinal ? 0 : 0.3,
+          temperature: 0.1,
         });
 
         if (transcription) {
-          this.logger.log(
-            isFinal ? LogLevel.INFO : LogLevel.DEBUG,
-            `Transcription successful on attempt ${attempt}`,
-            "TranscriptionService",
-            { isFinal, transcription }
-          );
+          console.log("Transcription successful", transcription);
           return transcription;
         }
       } catch (error) {
@@ -164,30 +95,57 @@ export class TranscriptionService extends EventEmitter {
       ErrorCodes.TRANSCRIPTION_FAILED,
       ErrorSeverity.HIGH,
       {
-        component: "TranscriptionService.retryTranscription",
+        component: "TranscriptionService.transcribe",
         originalError: lastError?.message,
         attempts: this.MAX_RETRIES,
-        isFinal,
       }
     );
   }
 
+  // cleanup temporary file
   private async cleanup(filePath: string): Promise<void> {
     try {
       await fs.promises.unlink(filePath);
     } catch (error) {
-      this.logger.error(
-        new ExpenseTrackerError(
-          "Failed to cleanup temporary file",
-          ErrorCodes.FILE_OPERATION_FAILED,
-          ErrorSeverity.LOW,
-          {
-            component: "TranscriptionService.cleanup",
-            originalError:
-              error instanceof Error ? error.message : String(error),
-            filePath,
-          }
-        )
+      console.error(
+        "Failed to cleanup temporary file:",
+        error instanceof Error ? error.message : String(error),
+        { filePath }
+      );
+    }
+  }
+  // the orchestrator for the transcription process
+  async transcribeAudioChunk(audioBuffer: ArrayBuffer): Promise<string> {
+    try {
+      // check if audio buffer is too short, if so, skip
+      if (audioBuffer.byteLength < this.MIN_CHUNK_SIZE) {
+        console.log("Skipping short audio chunk", "TranscriptionService", {
+          byteLength: audioBuffer.byteLength,
+        });
+        return "";
+      }
+
+      const tempFilePath = path.join(this.tempDir, `${uuidv4()}.wav`);
+      // write audio to temporary file
+      await this.writeAudioFile(tempFilePath, audioBuffer);
+
+      // transcribe audio
+      const transcription = await this.transcribe(tempFilePath);
+
+      // cleanup temporary file
+      await this.cleanup(tempFilePath);
+
+      // return transcription without leading or trailing whitespace
+      return transcription.trim();
+    } catch (error) {
+      throw new ExpenseTrackerError(
+        "Failed to transcribe audio chunk",
+        ErrorCodes.TRANSCRIPTION_FAILED,
+        ErrorSeverity.MEDIUM,
+        {
+          component: "TranscriptionService.transcribeAudioChunk",
+          originalError: error instanceof Error ? error.message : String(error),
+        }
       );
     }
   }

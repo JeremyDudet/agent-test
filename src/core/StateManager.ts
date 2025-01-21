@@ -1,17 +1,56 @@
 import { EventEmitter } from "events";
 import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "../utils/error";
-import type { AgentState } from "../types";
+import type {
+  Message,
+  ExpenseContext,
+  AgentStep,
+  ToolCall,
+  ActionContext,
+} from "../types";
+import { ExpenseService } from "../services/expense/ExpenseService";
+
+export interface ExpenseCategory {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface ExpenseProposal {
+  id: string;
+  content: string;
+  amount: number;
+  merchant: string;
+  category: ExpenseCategory;
+  context: ExpenseContext;
+}
+
+export interface MessageWindow {
+  processedMessages: Message[]; // Historical messages
+  newMessages: Message[]; // Recent/current messages
+  windowSize: number; // Max number of messages to keep
+}
+
+export interface AgentState {
+  isProcessing: boolean;
+  messageWindow: MessageWindow;
+  existingProposals: ExpenseProposal[];
+  currentStep: AgentStep;
+  toolCalls: ToolCall[];
+  actionContext: ActionContext;
+}
 
 export class StateManager extends EventEmitter {
   private static instance: StateManager;
   private state: AgentState | null = null;
   private stateHistory: AgentState[] = [];
   private readonly MAX_HISTORY = 10;
+  private readonly DEFAULT_WINDOW_SIZE = 20;
 
   private constructor() {
     super();
   }
 
+  // get the singleton instance
   static getInstance(): StateManager {
     if (!StateManager.instance) {
       StateManager.instance = new StateManager();
@@ -19,10 +58,12 @@ export class StateManager extends EventEmitter {
     return StateManager.instance;
   }
 
+  // check if the state has been initialized
   hasState(): boolean {
     return this.state !== null;
   }
 
+  // get the current state
   getState(): AgentState {
     if (!this.state) {
       throw new ExpenseTrackerError(
@@ -38,6 +79,7 @@ export class StateManager extends EventEmitter {
     return this.state;
   }
 
+  // set the entire state
   setState(newState: AgentState): void {
     if (this.state) {
       this.stateHistory.push({ ...this.state });
@@ -50,6 +92,7 @@ export class StateManager extends EventEmitter {
     this.emit("stateChanged", this.state);
   }
 
+  // update just the portion of the state that is passed in
   updateState(updates: Partial<AgentState>): void {
     if (!this.state) {
       throw new Error("State not initialized");
@@ -63,9 +106,9 @@ export class StateManager extends EventEmitter {
     this.state = {
       ...this.state,
       ...updates,
-      context: {
-        ...this.state.context,
-        ...(updates.context || {}),
+      messageWindow: {
+        ...this.state.messageWindow,
+        ...(updates.messageWindow || {}),
       },
       actionContext: {
         ...this.state.actionContext,
@@ -77,39 +120,55 @@ export class StateManager extends EventEmitter {
       },
     };
 
+    // Emit general state change event
     this.emit("stateChanged", this.state);
-  }
 
-  undoLastChange(): boolean {
-    if (this.stateHistory.length > 0) {
-      const previousState = this.stateHistory.pop()!;
-      this.state = { ...previousState };
-      this.emit("stateChanged", this.state);
-      return true;
+    // If proposals were updated, emit specific proposals update event
+    if (updates.actionContext?.proposals !== undefined) {
+      this.emit("proposalsUpdated", {
+        proposals: this.state.actionContext.proposals,
+        timestamp: new Date().toISOString(),
+      });
     }
-    return false;
   }
 
-  clearActionContext(): void {
-    if (!this.state) return;
+  // append a message to the processed messages
+  appendToProcessedMessages(message: Message): void {
+    // Validate state exists
+    if (!this.state) {
+      return;
+    }
 
+    // Ensure arrays exist with default empty arrays
+    const currentNewMessages = this.state.messageWindow.newMessages || [];
+    const currentProcessedMessages =
+      this.state.messageWindow.processedMessages || [];
+
+    // Update state with filtered newMessages and prepended processedMessages
     this.updateState({
-      actionContext: {
-        proposals: [],
-        currentInput: "",
-        isProcessing: false,
+      messageWindow: {
+        newMessages: currentNewMessages.filter((msg) => msg !== message), // remove the message from the newMessages array
+        processedMessages: [message, ...currentProcessedMessages], // add the message to the processedMessages array
+        windowSize: this.state.messageWindow.windowSize,
       },
     });
   }
 
-  getSnapshot(): string {
-    return JSON.stringify(this.state, null, 2);
+  // fetch the user's expense categories
+  async fetchUserExpenseCategories(): Promise<ExpenseCategory[]> {
+    return ExpenseService.getCategories();
   }
 
+  // reset the state
   reset(): void {
     this.setState({
-      messages: [],
-      context: {},
+      isProcessing: false,
+      messageWindow: {
+        processedMessages: [],
+        newMessages: [],
+        windowSize: this.DEFAULT_WINDOW_SIZE,
+      },
+      existingProposals: [],
       currentStep: "initial",
       toolCalls: [],
       actionContext: {
@@ -121,22 +180,4 @@ export class StateManager extends EventEmitter {
     this.stateHistory = [];
     this.emit("stateReset");
   }
-
-  onStateChange(callback: (state: AgentState) => void): void {
-    this.on("stateChanged", callback);
-  }
-
-  offStateChange(callback: (state: AgentState) => void): void {
-    this.off("stateChanged", callback);
-  }
-
-  debugState(): void {
-    console.log("Current State:", this.getSnapshot());
-    console.log("State History Length:", this.stateHistory.length);
-  }
-}
-
-export interface StateManagerEvents {
-  stateChanged: (state: AgentState) => void;
-  stateReset: () => void;
 }
