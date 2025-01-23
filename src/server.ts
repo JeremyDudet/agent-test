@@ -10,7 +10,6 @@ import { ExpenseAgent } from "./core/Agent";
 import { StateManager } from "./core/StateManager";
 import { TranscriptionOrderManager } from "./services/transcription/TranscriptionOrderManager";
 import { TranscriptionService } from "./services/transcription/TranscriptionService";
-import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "./utils/error";
 import type { ActionProposal } from "./types";
 import { format, parseISO, subDays, subMonths } from "date-fns";
 import { userConfig } from "./config";
@@ -127,28 +126,16 @@ io.on("connection", async (socket) => {
       } catch (error) {
         // handle any errors during processing
         // convert generic errors to ExpenseTrackerError for consistent error handling
-        const trackerError =
-          error instanceof ExpenseTrackerError
-            ? error
-            : new ExpenseTrackerError(
-                "Error processing partial audio",
-                ErrorCodes.PARTIAL_PROCESSING_FAILED,
-                ErrorSeverity.MEDIUM,
-                {
-                  component: "SocketServer.audioDataPartial",
-                  originalError:
-                    error instanceof Error ? error.message : String(error),
-                }
-              );
-
-        // Log the error
-        console.error(trackerError, "SocketServer");
+        console.log("Error processing partial audio", {
+          component: "SocketServer.audioDataPartial",
+          error: error instanceof Error ? error.message : String(error),
+        });
 
         // Send error information back to client
         if (callback) {
           callback({
             success: false,
-            error: trackerError.message,
+            error: error instanceof Error ? error.message : String(error),
             sequenceId: data.sequenceId,
           });
         }
@@ -161,23 +148,9 @@ io.on("connection", async (socket) => {
       // Reset the audio buffer for this socket ID when audio recording is complete
       userAudioBuffers[socket.id] = [];
     } catch (error) {
-      const trackerError =
-        error instanceof ExpenseTrackerError
-          ? error
-          : new ExpenseTrackerError(
-              "Error completing audio session",
-              ErrorCodes.AUDIO_COMPLETION_FAILED,
-              ErrorSeverity.MEDIUM,
-              {
-                component: "SocketServer.audioComplete",
-                originalError:
-                  error instanceof Error ? error.message : String(error),
-              }
-            );
-      console.error(trackerError, "SocketServer");
-      socket.emit("error", {
-        message: trackerError.message,
-        details: trackerError.metadata,
+      console.error("Error completing audio session", {
+        component: "SocketServer.audioComplete",
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   });

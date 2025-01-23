@@ -1,5 +1,6 @@
-import type { StateManager } from "../core/StateManager";
+import type { StateManager, TimeContext } from "../core/StateManager";
 import type { ActionQueue } from "../core/ActionQueue";
+import type { Message } from "openai/resources/beta/threads/messages.mjs";
 
 // Base state interfaces
 export interface AgentState {
@@ -17,23 +18,11 @@ export type AgentStep =
   | "acting"
   | "complete";
 
-// Message types
-export interface Message {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
 // Context types
 export interface ExpenseContext {
   timeContext?: TimeContext;
   understanding?: UnderstandingContext;
   [key: string]: any;
-}
-
-export interface TimeContext {
-  now: Date;
-  formattedNow: string;
-  timeZone: string;
 }
 
 export interface UnderstandingContext {

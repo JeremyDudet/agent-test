@@ -6,11 +6,6 @@ import { v4 as uuidv4 } from "uuid";
 import os from "os";
 import path from "path";
 import fs from "fs";
-import {
-  ExpenseTrackerError,
-  ErrorCodes,
-  ErrorSeverity,
-} from "../../utils/error";
 
 export class TranscriptionService extends EventEmitter {
   private openai: OpenAI;
@@ -46,15 +41,10 @@ export class TranscriptionService extends EventEmitter {
 
       await writeFile(filePath, dataToWrite);
     } catch (error) {
-      throw new ExpenseTrackerError(
-        "Failed to write audio file",
-        ErrorCodes.FILE_OPERATION_FAILED,
-        ErrorSeverity.MEDIUM,
-        {
-          component: "TranscriptionService.writeAudioFile",
-          originalError: error instanceof Error ? error.message : String(error),
-          filePath,
-        }
+      throw new Error(
+        `Failed to write audio file: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
     }
   }
@@ -93,15 +83,8 @@ export class TranscriptionService extends EventEmitter {
       }
     }
 
-    throw new ExpenseTrackerError(
-      "Max retries exceeded for transcription",
-      ErrorCodes.TRANSCRIPTION_FAILED,
-      ErrorSeverity.HIGH,
-      {
-        component: "TranscriptionService.transcribe",
-        originalError: lastError?.message,
-        attempts: this.MAX_RETRIES,
-      }
+    throw new Error(
+      `Max retries exceeded for transcription: ${lastError?.message}`
     );
   }
 
@@ -141,14 +124,10 @@ export class TranscriptionService extends EventEmitter {
       // return transcription without leading or trailing whitespace
       return transcription.trim();
     } catch (error) {
-      throw new ExpenseTrackerError(
-        "Failed to transcribe audio chunk",
-        ErrorCodes.TRANSCRIPTION_FAILED,
-        ErrorSeverity.MEDIUM,
-        {
-          component: "TranscriptionService.transcribeAudioChunk",
-          originalError: error instanceof Error ? error.message : String(error),
-        }
+      throw new Error(
+        `Failed to transcribe audio chunk: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
     }
   }

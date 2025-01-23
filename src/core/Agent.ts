@@ -2,7 +2,6 @@
 import { OpenAI } from "openai";
 import { TavilyAPI } from "../services/search/TavilyAPI";
 import { StateManager, type AgentState } from "./StateManager";
-import { ExpenseTrackerError, ErrorSeverity, ErrorCodes } from "../utils/error";
 
 export interface ExpenseProposal {
   id: string;
@@ -206,16 +205,12 @@ Example JSON structure:
 
       return proposals;
     } catch (error) {
-      throw new ExpenseTrackerError(
-        "Failed to process transcription",
-        ErrorCodes.MESSAGE_PROCESSING_FAILED,
-        ErrorSeverity.HIGH,
-        {
-          component: "ExpenseAgent.processNewTranscription",
-          originalError: error instanceof Error ? error.message : String(error),
-          transcriptionText: newTranscript,
-        }
-      );
+      console.error("Failed to process transcription", {
+        component: "ExpenseAgent.processNewTranscription",
+        error: error instanceof Error ? error.message : String(error),
+        transcriptionText: newTranscript,
+      });
+      return [];
     }
   }
 }

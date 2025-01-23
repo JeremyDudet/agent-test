@@ -1,16 +1,20 @@
 import { EventEmitter } from "events";
-import type {
-  Message,
-  ExpenseContext,
-  ToolCall,
-  ActionContext,
-  TimeContext,
-} from "../types";
 import { ExpenseService } from "../services/expense/ExpenseService";
 import { format, parseISO, subDays, subMonths } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import { userConfig } from "../config";
 import type { ExpenseProposal } from "../core/Agent";
+
+export interface Message {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface TimeContext {
+  now: Date;
+  formattedNow: string;
+  timeZone: string;
+}
 
 export interface ExpenseCategory {
   id: string;
