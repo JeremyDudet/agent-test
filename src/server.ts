@@ -12,6 +12,9 @@ import { TranscriptionOrderManager } from "./services/transcription/Transcriptio
 import { TranscriptionService } from "./services/transcription/TranscriptionService";
 import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "./utils/error";
 import type { ActionProposal } from "./types";
+import { format, parseISO, subDays, subMonths } from "date-fns";
+import { userConfig } from "./config";
+import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 
 config();
 
@@ -30,13 +33,16 @@ stateManager.setState({
     windowSize: 20,
   },
   existingProposals: [],
-  currentStep: "initial",
-  actionContext: {
-    proposals: [],
-    currentInput: "",
-    isProcessing: false,
+  timeContext: {
+    now: new Date(),
+    formattedNow: formatInTimeZone(
+      new Date(),
+      userConfig.timeZone,
+      "yyyy-MM-dd"
+    ),
+    timeZone: userConfig.timeZone || "America/Los_Angeles",
   },
-  toolCalls: [],
+  userExpenseCategories: await stateManager.getUserExpenseCategories(),
 });
 
 const httpServer = createServer();
@@ -104,7 +110,6 @@ io.on("connection", async (socket) => {
         }
 
         // add transcribed chunk to order manager to maintain sequence
-        // the false parameter indicates this is not the final chunk
         transcriptionOrderManager.addChunk(
           data.sequenceId,
           data.timestamp,

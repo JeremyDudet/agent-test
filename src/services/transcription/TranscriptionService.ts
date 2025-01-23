@@ -77,7 +77,10 @@ export class TranscriptionService extends EventEmitter {
         });
 
         if (transcription) {
-          console.log("Transcription successful", transcription);
+          console.log(
+            "[TRANSCRIPTION SERVICE] transcription successful!\n",
+            `transcription: "${transcription}"`
+          );
           return transcription;
         }
       } catch (error) {

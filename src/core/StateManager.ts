@@ -1,27 +1,21 @@
 import { EventEmitter } from "events";
-import { ExpenseTrackerError, ErrorCodes, ErrorSeverity } from "../utils/error";
 import type {
   Message,
   ExpenseContext,
-  AgentStep,
   ToolCall,
   ActionContext,
+  TimeContext,
 } from "../types";
 import { ExpenseService } from "../services/expense/ExpenseService";
+import { format, parseISO, subDays, subMonths } from "date-fns";
+import { formatInTimeZone, toZonedTime } from "date-fns-tz";
+import { userConfig } from "../config";
+import type { ExpenseProposal } from "../core/Agent";
 
 export interface ExpenseCategory {
   id: string;
   name: string;
   description: string;
-}
-
-export interface ExpenseProposal {
-  id: string;
-  content: string;
-  amount: number;
-  merchant: string;
-  category: ExpenseCategory;
-  context: ExpenseContext;
 }
 
 export interface MessageWindow {
@@ -34,9 +28,8 @@ export interface AgentState {
   isProcessing: boolean;
   messageWindow: MessageWindow;
   existingProposals: ExpenseProposal[];
-  currentStep: AgentStep;
-  toolCalls: ToolCall[];
-  actionContext: ActionContext;
+  userExpenseCategories: ExpenseCategory[];
+  timeContext: TimeContext;
 }
 
 export class StateManager extends EventEmitter {
@@ -66,15 +59,11 @@ export class StateManager extends EventEmitter {
   // get the current state
   getState(): AgentState {
     if (!this.state) {
-      throw new ExpenseTrackerError(
-        "State not initialized",
-        ErrorCodes.INVALID_STATE,
-        ErrorSeverity.HIGH,
-        {
-          component: "StateManager",
-          context: { hasState: false },
-        }
-      );
+      console.error("[StateManager] State not initialized", {
+        component: "StateManager",
+        context: { hasState: false },
+      });
+      throw new Error("State not initialized");
     }
     return this.state;
   }
@@ -110,26 +99,10 @@ export class StateManager extends EventEmitter {
         ...this.state.messageWindow,
         ...(updates.messageWindow || {}),
       },
-      actionContext: {
-        ...this.state.actionContext,
-        ...(updates.actionContext || {}),
-        proposals:
-          updates.actionContext?.proposals !== undefined
-            ? updates.actionContext.proposals
-            : this.state.actionContext.proposals,
-      },
     };
 
     // Emit general state change event
     this.emit("stateChanged", this.state);
-
-    // If proposals were updated, emit specific proposals update event
-    if (updates.actionContext?.proposals !== undefined) {
-      this.emit("proposalsUpdated", {
-        proposals: this.state.actionContext.proposals,
-        timestamp: new Date().toISOString(),
-      });
-    }
   }
 
   // append a message to the processed messages
@@ -155,8 +128,16 @@ export class StateManager extends EventEmitter {
   }
 
   // fetch the user's expense categories
-  async fetchUserExpenseCategories(): Promise<ExpenseCategory[]> {
-    return ExpenseService.getCategories();
+  async getUserExpenseCategories(): Promise<ExpenseCategory[]> {
+    try {
+      return await ExpenseService.getCategories();
+    } catch (error) {
+      console.error(
+        "Failed to fetch expense categories:",
+        error instanceof Error ? error.message : String(error)
+      );
+      throw error;
+    }
   }
 
   // reset the state
@@ -169,12 +150,11 @@ export class StateManager extends EventEmitter {
         windowSize: this.DEFAULT_WINDOW_SIZE,
       },
       existingProposals: [],
-      currentStep: "initial",
-      toolCalls: [],
-      actionContext: {
-        proposals: [],
-        currentInput: "",
-        isProcessing: false,
+      userExpenseCategories: [],
+      timeContext: {
+        now: new Date(),
+        formattedNow: format(new Date(), "yyyy-MM-dd"),
+        timeZone: userConfig.timeZone || "America/Los_Angeles",
       },
     });
     this.stateHistory = [];

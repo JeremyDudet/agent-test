@@ -12,43 +12,40 @@ export class TranscriptionOrderManager extends EventEmitter {
   private stateManager: StateManager;
   private chunks: Map<number, TranscriptionChunk>;
   private readonly CHUNK_TIMEOUT = 5000; // 5 seconds
-
+  private agent: ExpenseAgent;
   constructor() {
     super();
     this.chunks = new Map();
     this.stateManager = StateManager.getInstance(); // get the state manager
+    this.agent = new ExpenseAgent();
   }
 
   // once a transcription is received, add it to the process queue, and trigger the processChunks method
   addChunk(id: number, timestamp: number, transcript: string) {
-    console.log("Adding chunk", id, timestamp, transcript);
+    console.log(
+      "[TRANSCRIPTION ORDER MANAGER] Adding chunk",
+      `id: ${id}\ntimestamp: ${timestamp}\ntranscript: ${transcript}`
+    );
     this.chunks.set(id, { id, timestamp, transcript }); // Add the chunk to the map
+
     this.processChunks(); // Process the chunks
   }
 
   // process the chunks in order
   private async processChunks() {
     // set the state to processing
+    console.log("[TRANSCRIPTION ORDER MANAGER] Processing...");
     this.stateManager.updateState({
-      actionContext: {
-        ...this.stateManager.getState().actionContext,
-        isProcessing: true,
-      },
+      isProcessing: true,
     });
-
     do {
       const state = this.stateManager.getState(); // get the state
+      console.log("[TRANSCRIPTION ORDER MANAGER] State:", state);
       const chunksToProcess = Array.from(this.chunks.values()); // Get all available chunks
-
-      // if state is not processing, set it to processing
-      if (!state.actionContext.isProcessing) {
-        this.stateManager.updateState({
-          actionContext: {
-            ...state.actionContext,
-            isProcessing: true,
-          },
-        });
-      }
+      console.log(
+        "[TRANSCRIPTION ORDER MANAGER] Chunks to process:",
+        chunksToProcess
+      );
 
       // Sort by timestamp and combine
       const orderedChunks = chunksToProcess.sort(
@@ -71,17 +68,16 @@ export class TranscriptionOrderManager extends EventEmitter {
         timestamp: lastChunk.timestamp,
       });
 
-      // Process through agent
-      const agent = new ExpenseAgent();
-      const proposals = await agent.processNewTranscription(combinedTranscript);
+      // Process the transcription through the agent
+      const proposals = await this.agent.processLatestTranscription(
+        combinedTranscript,
+        state
+      );
 
       if (proposals.length > 0) {
         // Update state with new proposals
         this.stateManager.updateState({
-          actionContext: {
-            ...state.actionContext,
-            proposals: [...state.actionContext.proposals, ...proposals],
-          },
+          existingProposals: [...state.existingProposals, ...proposals],
         });
 
         // Emit proposals event to the client
@@ -105,10 +101,7 @@ export class TranscriptionOrderManager extends EventEmitter {
 
     // set the state to not processing
     this.stateManager.updateState({
-      actionContext: {
-        ...this.stateManager.getState().actionContext,
-        isProcessing: false,
-      },
+      isProcessing: false,
     });
   }
 
@@ -117,10 +110,7 @@ export class TranscriptionOrderManager extends EventEmitter {
     this.chunks.clear();
     // set the state to not processing
     this.stateManager.updateState({
-      actionContext: {
-        ...this.stateManager.getState().actionContext,
-        isProcessing: false,
-      },
+      isProcessing: false,
     });
     console.log("Resetting transcription order manager");
   }
