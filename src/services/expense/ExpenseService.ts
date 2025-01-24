@@ -1,11 +1,6 @@
 import { format } from "date-fns";
 import type { ActionParameters } from "../../types";
 import { supabase } from "../database/supabase";
-import {
-  ExpenseTrackerError,
-  ErrorCodes,
-  ErrorSeverity,
-} from "../../utils/error";
 import type { ExpenseCategory } from "../../core/StateManager";
 
 export class ExpenseService {
@@ -13,15 +8,7 @@ export class ExpenseService {
     try {
       // Validate required parameters
       if (!params.amount || !params.description || !params.category) {
-        throw new ExpenseTrackerError(
-          "Missing required expense parameters",
-          ErrorCodes.VALIDATION_FAILED,
-          ErrorSeverity.MEDIUM,
-          {
-            component: "ExpenseTools.addExpense",
-            providedParams: Object.keys(params),
-          }
-        );
+        throw new Error("Missing required expense parameters");
       }
 
       const date = params.date ? new Date(params.date) : new Date();
@@ -34,16 +21,7 @@ export class ExpenseService {
           });
 
         if (embeddingError || !embedding) {
-          throw new ExpenseTrackerError(
-            "Failed to generate embedding",
-            ErrorCodes.TOOL_EXECUTION_FAILED,
-            ErrorSeverity.MEDIUM,
-            {
-              component: "ExpenseTools.addExpense",
-              originalError: embeddingError?.message,
-              description: params.description,
-            }
-          );
+          throw new Error("Failed to generate embedding");
         }
 
         // Handle category
@@ -72,16 +50,7 @@ export class ExpenseService {
             .single();
 
           if (categoryError) {
-            throw new ExpenseTrackerError(
-              "Failed to create category",
-              ErrorCodes.TOOL_EXECUTION_FAILED,
-              ErrorSeverity.HIGH,
-              {
-                component: "ExpenseTools.addExpense",
-                originalError: categoryError.message,
-                category: params.category,
-              }
-            );
+            throw new Error("Failed to create category");
           }
           category_id = newCategory.id;
         }
@@ -106,20 +75,7 @@ export class ExpenseService {
           .single();
 
         if (error) {
-          throw new ExpenseTrackerError(
-            "Failed to insert expense",
-            ErrorCodes.TOOL_EXECUTION_FAILED,
-            ErrorSeverity.HIGH,
-            {
-              component: "ExpenseTools.addExpense",
-              originalError: error.message,
-              expense: {
-                amount: expense.amount,
-                description: expense.description,
-                category_id: expense.category_id,
-              },
-            }
-          );
+          throw new Error("Failed to insert expense");
         }
 
         return data;
@@ -135,23 +91,14 @@ export class ExpenseService {
         }
 
         // Handle other errors
-        if (error instanceof ExpenseTrackerError) {
-          throw error;
-        }
-
-        throw new ExpenseTrackerError(
-          "Failed to add expense",
-          ErrorCodes.TOOL_EXECUTION_FAILED,
-          ErrorSeverity.HIGH,
-          {
-            component: "ExpenseTools.addExpense",
-            originalError:
-              error instanceof Error ? error.message : String(error),
-          }
-        );
+        throw new Error("Failed to add expense");
       }
     } catch (error) {
-      throw error;
+      throw new Error(
+        `Failed to add expense: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   }
 
