@@ -3,7 +3,7 @@ import { ExpenseService } from "../services/expense/ExpenseService";
 import { format, parseISO, subDays, subMonths } from "date-fns";
 import { formatInTimeZone, toZonedTime } from "date-fns-tz";
 import { userConfig } from "../config";
-import type { ExpenseProposal } from "../core/Agent";
+import type { ExpenseProposal } from "./Agent";
 
 export interface Message {
   role: "system" | "user" | "assistant";
