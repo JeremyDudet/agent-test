@@ -153,6 +153,8 @@ export interface ClientState {
   isListening: boolean;
   isRecording: boolean;
   isInitializing: boolean;
+  isVadInitializing: boolean;
+  isNoiseAnalyzing: boolean;
   error: string | null;
   transcriptions: string[];
   proposals: Proposal[];

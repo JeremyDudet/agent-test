@@ -7,6 +7,8 @@ interface ClientState {
   isListening: boolean;
   isRecording: boolean;
   isInitializing: boolean;
+  isVadInitializing: boolean;
+  isNoiseAnalyzing: boolean;
   error: string | null;
   transcriptions: string[];
   proposals: Proposal[];
@@ -29,6 +31,8 @@ class StateManager {
       isListening: false,
       isRecording: false,
       isInitializing: false,
+      isVadInitializing: false,
+      isNoiseAnalyzing: false,
       error: null,
       transcriptions: [],
       proposals: [],
@@ -63,9 +67,20 @@ class StateManager {
 
   // Handle server state updates
   public handleServerState(serverState: AgentState) {
+    // Convert ExpenseProposal to Proposal
+    const proposals: Proposal[] = serverState.existingProposals.map(ep => ({
+      id: ep.id,
+      amount: ep.amount,
+      merchant: ep.item, // Use item as merchant
+      category: ep.category,
+      date: ep.date,
+      status: ep.status === 'draft' ? 'pending_review' : ep.status,
+      description: ep.originalText,
+    }));
+
     this.updateState({
       isProcessing: serverState.isProcessing,
-      proposals: serverState.existingProposals,
+      proposals,
       messageWindow: serverState.messageWindow,
       userExpenseCategories: serverState.userExpenseCategories,
     });
@@ -103,6 +118,8 @@ class StateManager {
       isListening: false,
       isRecording: false,
       isInitializing: false,
+      isVadInitializing: false,
+      isNoiseAnalyzing: false,
       error: null,
       transcriptions: [],
     };

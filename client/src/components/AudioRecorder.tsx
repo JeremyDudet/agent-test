@@ -30,6 +30,8 @@ export function AudioRecorder() {
       isProcessing,
       isListening,
       isInitializing,
+      isVadInitializing,
+      isNoiseAnalyzing,
       isRecording: isVoiceActive,
       error,
       transcriptions,
@@ -68,164 +70,179 @@ export function AudioRecorder() {
 
   // Initialize Voice Activity Detection (VAD) with the given audio stream
   const initializeVAD = async (stream: MediaStream) => {
+    updateState({ isVadInitializing: true });
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
 
-    // Add error handling for AudioContext state
-    if (audioContext.state === 'suspended') {
-      await audioContext.resume();
-    }
-
-    // Set up audio processing pipeline
-    // Create audio source from input stream
-    const source = audioContext.createMediaStreamSource(stream);
-
-    // Load custom audio processor worklet for handling raw audio data
-    await audioContext.audioWorklet.addModule('/audio-processor.js');
-
-    // Create processor node instance
-    const processor = new AudioWorkletNode(audioContext, 'audio-processor');
-
-    // Handle processed audio data from worklet
-    // Maintains a circular buffer of recent audio data
-    processor.port.onmessage = (e) => {
-      if (!isVoiceActiveRef.current) {
-        PRE_RECORDING_BUFFER.push(new Float32Array(e.data));
-        // Remove oldest data if buffer exceeds size limit
-        if (PRE_RECORDING_BUFFER.length > BUFFER_DURATION / (4096 / audioContext.sampleRate)) {
-          PRE_RECORDING_BUFFER.shift();
-        }
+    try {
+      // Add error handling for AudioContext state
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
       }
-    };
 
-    // Connect audio source to processor
-    source.connect(processor);
+      // Set up audio processing pipeline
+      // Create audio source from input stream
+      const source = audioContext.createMediaStreamSource(stream);
 
-    const vadOptions: ExtendedVADOptions = {
-      onVoiceStart: () => {
-        if (!recorderRef.current) {
-          console.error('[VAD] Recorder not initialized');
-          return;
-        }
+      // Load custom audio processor worklet for handling raw audio data
+      await audioContext.audioWorklet.addModule('/audio-processor.js');
 
-        isVoiceActiveRef.current = true;
-        console.log('[VAD] Voice started');
-        voiceStartTimeRef.current = Date.now();
+      // Create processor node instance
+      const processor = new AudioWorkletNode(audioContext, 'audio-processor');
 
-        try {
-          // Ensure recorder is in ready state before starting
-          if (recorderRef.current.state === 'inactive' || recorderRef.current.state === 'stopped') {
-            recorderRef.current?.startRecording();
-            console.log('[VAD] Recording started');
-          } else {
-            console.warn('[VAD] Recorder already active, state:', recorderRef.current.state);
+      // Handle processed audio data from worklet
+      // Maintains a circular buffer of recent audio data
+      processor.port.onmessage = (e) => {
+        if (!isVoiceActiveRef.current) {
+          PRE_RECORDING_BUFFER.push(new Float32Array(e.data));
+          // Remove oldest data if buffer exceeds size limit
+          if (PRE_RECORDING_BUFFER.length > BUFFER_DURATION / (4096 / audioContext.sampleRate)) {
+            PRE_RECORDING_BUFFER.shift();
           }
-        } catch (err) {
-          console.error('[VAD] Error starting recording:', err);
-          setError(err instanceof Error ? err.message : String(err));
         }
-      },
+      };
 
-      onVoiceStop: async () => {
-        isVoiceActiveRef.current = false;
-        console.log('[VAD] Voice stopped');
+      // Connect audio source to processor
+      source.connect(processor);
 
-        if (!recorderRef.current) {
-          console.warn('[VAD] No recorder instance available');
-          return;
-        }
-
-        // Add a small delay to capture trailing audio
-        await new Promise((resolve) => setTimeout(resolve, 300));
-
-        try {
-          const voiceEndTime = Date.now();
-          const duration = voiceStartTimeRef.current ? voiceEndTime - voiceStartTimeRef.current : 0;
-
-          if (duration < 150) {
-            console.log('[VAD] Chunk < 1/3 second. Discarding...');
-            await new Promise<void>((resolve) => {
-              recorderRef.current?.stopRecording(() => {
-                recorderRef.current?.reset();
-                resolve();
-              });
-            });
+      const vadOptions: ExtendedVADOptions = {
+        onVoiceStart: () => {
+          if (!recorderRef.current) {
+            console.error('[VAD] Recorder not initialized');
             return;
           }
 
-          // Stop and get final blob
-          const blob = await new Promise<Blob>((resolve, reject) => {
-            if (!recorderRef.current) {
-              reject(new Error('Recorder not initialized'));
+          isVoiceActiveRef.current = true;
+          console.log('[VAD] Voice started');
+          voiceStartTimeRef.current = Date.now();
+
+          try {
+            // Ensure recorder is in ready state before starting
+            if (recorderRef.current.state === 'inactive' || recorderRef.current.state === 'stopped') {
+              recorderRef.current?.startRecording();
+              console.log('[VAD] Recording started');
+            } else {
+              console.warn('[VAD] Recorder already active, state:', recorderRef.current.state);
+            }
+          } catch (err) {
+            console.error('[VAD] Error starting recording:', err);
+            setError(err instanceof Error ? err.message : String(err));
+          }
+        },
+
+        onVoiceStop: async () => {
+          isVoiceActiveRef.current = false;
+          console.log('[VAD] Voice stopped');
+
+          if (!recorderRef.current) {
+            console.warn('[VAD] No recorder instance available');
+            return;
+          }
+
+          // Add a small delay to capture trailing audio
+          await new Promise((resolve) => setTimeout(resolve, 300));
+
+          try {
+            const voiceEndTime = Date.now();
+            const duration = voiceStartTimeRef.current ? voiceEndTime - voiceStartTimeRef.current : 0;
+
+            if (duration < 150) {
+              console.log('[VAD] Chunk < 1/3 second. Discarding...');
+              await new Promise<void>((resolve) => {
+                recorderRef.current?.stopRecording(() => {
+                  recorderRef.current?.reset();
+                  resolve();
+                });
+              });
               return;
             }
-            recorderRef.current.stopRecording(() => {
-              const b = recorderRef.current?.getBlob();
-              if (b) {
-                resolve(b);
-              } else {
-                reject(new Error('Failed to get recording blob'));
+
+            // Stop and get final blob
+            const blob = await new Promise<Blob>((resolve, reject) => {
+              if (!recorderRef.current) {
+                reject(new Error('Recorder not initialized'));
+                return;
               }
+              recorderRef.current.stopRecording(() => {
+                const b = recorderRef.current?.getBlob();
+                if (b) {
+                  resolve(b);
+                } else {
+                  reject(new Error('Failed to get recording blob'));
+                }
+              });
             });
-          });
 
-          // Merge the 1-second pre-recording buffer with RecordRTC's blob
-          const mergedBlob = await mergePreRecordingBufferWithRecordedAudio(
-            PRE_RECORDING_BUFFER, // your ring buffer array
-            blob,
-            audioContextRef.current || null // your AudioContext
-          );
+            // Merge the 1-second pre-recording buffer with RecordRTC's blob
+            const mergedBlob = await mergePreRecordingBufferWithRecordedAudio(
+              PRE_RECORDING_BUFFER, // your ring buffer array
+              blob,
+              audioContextRef.current || null // your AudioContext
+            );
 
-          // Clear the buffer once merged
-          PRE_RECORDING_BUFFER.length = 0;
+            // Clear the buffer once merged
+            PRE_RECORDING_BUFFER.length = 0;
 
-          // Convert mergedBlob to ArrayBuffer and push to queue
-          const audioBuffer = await mergedBlob.arrayBuffer();
-          const currentSequence = sequenceCounterRef.current++;
+            // Convert mergedBlob to ArrayBuffer and push to queue
+            const audioBuffer = await mergedBlob.arrayBuffer();
+            const currentSequence = sequenceCounterRef.current++;
 
-          audioQueueRef.current.push({
-            audio: audioBuffer,
-            context: semanticContextRef.current,
-            timestamp: Date.now(),
-            sequenceId: currentSequence,
-          });
+            audioQueueRef.current.push({
+              audio: audioBuffer,
+              context: semanticContextRef.current,
+              timestamp: Date.now(),
+              sequenceId: currentSequence,
+            });
 
-          processQueue();
-          recorderRef.current?.reset();
-        } catch (err) {
-          console.error('[VAD] Error processing voice segment:', err);
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      },
+            processQueue();
+            recorderRef.current?.reset();
+          } catch (err) {
+            console.error('[VAD] Error processing voice segment:', err);
+            setError(err instanceof Error ? err.message : String(err));
+          }
+        },
 
-      onUpdate: (amplitude: number) => {
-        // if recording is active, log amplitude
-        if (isVoiceActive) {
-          console.log('[VAD] Amplitude:', amplitude);
-        }
-      },
+        onUpdate: (amplitude: number) => {
+          // if recording is active, log amplitude
+          if (isVoiceActive) {
+            console.log('[VAD] Amplitude:', amplitude);
+          }
+        },
 
-      // VAD configuration parameters
-      bufferLen: 1024,
-      avgNoiseMultiplier: 1.5,
-      minNoiseLevel: 0.4, // Reduced sensitivity
-      maxNoiseLevel: 0.7, // Increased range
-      minCaptureFreq: 85, // Voice frequency range
-      maxCaptureFreq: 255,
-      noiseCaptureDuration: 2000, // Longer noise analysis
-      minSpeechDuration: 250, // Minimum 250ms of speech
-      maxSpeechDuration: 60000, // Maximum 60s per segment (1 minute)
-      silenceDuration: 1500, // Shorter silence detection
-      smoothingTimeConstant: 0.2, // More smoothing
-      audioBuffering: {
-        enabled: true,
-        duration: 500,
-      },
-    };
+        // VAD configuration parameters
+        bufferLen: 1024,
+        avgNoiseMultiplier: 1.5,
+        minNoiseLevel: 0.4, // Reduced sensitivity
+        maxNoiseLevel: 0.7, // Increased range
+        minCaptureFreq: 85, // Voice frequency range
+        maxCaptureFreq: 255,
+        noiseCaptureDuration: 2000, // Longer noise analysis
+        minSpeechDuration: 250, // Minimum 250ms of speech
+        maxSpeechDuration: 60000, // Maximum 60s per segment (1 minute)
+        silenceDuration: 1500, // Shorter silence detection
+        smoothingTimeConstant: 0.2, // More smoothing
+        audioBuffering: {
+          enabled: true,
+          duration: 500,
+        },
+      };
 
-    // Initialize Voice Activity Detection with configuration
-    vadRef.current = await VAD(audioContext, stream, vadOptions);
-    console.log('[VAD] Voice Activity Detection initialized with options:', vadOptions);
+      // Initialize Voice Activity Detection with configuration
+      console.log('[VAD] Starting noise analysis...');
+      updateState({ isNoiseAnalyzing: true });
+      vadRef.current = await VAD(audioContext, stream, vadOptions);
+      console.log('[VAD] Voice Activity Detection initialized with options:', vadOptions);
+      
+      // Wait for noise analysis to complete (2000ms as per noiseCaptureDuration)
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      updateState({ isNoiseAnalyzing: false });
+      
+    } catch (err) {
+      console.error('[VAD] Error initializing:', err);
+      throw err;
+    } finally {
+      updateState({ isVadInitializing: false });
+    }
   };
 
   // Process audio chunks from the queue and send them to the server for transcription
@@ -400,8 +417,8 @@ export function AudioRecorder() {
         throw new Error('Socket not connected');
       }
 
-      updateState({ isListening: true });
       reset();
+      updateState({ isListening: true });
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -443,7 +460,11 @@ export function AudioRecorder() {
     console.log('[CLEANUP] Starting cleanup of audio resources');
     try {
       console.log('[CLEANUP] Setting voice active state to false');
-      updateState({ isRecording: false });
+      updateState({ 
+        isRecording: false, 
+        isVadInitializing: false,
+        isNoiseAnalyzing: false 
+      });
 
       if (vadRef.current) {
         console.log('[CLEANUP] Destroying VAD instance');
@@ -597,14 +618,16 @@ export function AudioRecorder() {
       <ListeningStatus
         isListening={isListening}
         isRecording={isVoiceActive}
-        isInitializing={isInitializing}
+        isInitializing={isInitializing || isVadInitializing || isNoiseAnalyzing}
       />
       <Button
         color={isListening ? 'red' : 'blue'}
         onClick={isListening ? stopListening : startListening}
-        disabled={isInitializing}
+        disabled={isInitializing || isVadInitializing || isNoiseAnalyzing}
       >
-        {isInitializing ? 'Initializing...' : isListening ? 'Stop Listening' : 'Start Listening'}
+        {isInitializing || isVadInitializing ? 'Initializing...' : 
+         isNoiseAnalyzing ? 'Analyzing Background Noise...' : 
+         isListening ? 'Stop Listening' : 'Start Listening'}
       </Button>
       {error && (
         <Alert color="red" title="Error" onClose={() => setError(null)}>
