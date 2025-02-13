@@ -1,114 +1,205 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import useStore from '../store/useStore';
+import { cn } from "../lib/utils";
+import { Button } from "../components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "../components/ui/dropdown-menu";
+import { 
+  LayoutDashboard, 
+  Receipt, 
+  Settings,
+  History,
+  Star,
+  FileText,
+  Building2,
+  ChevronDown,
+  PlayCircle,
+  Briefcase,
+  Plane,
+  MoreHorizontal,
+  Menu,
+  X
+} from 'lucide-react';
 
-const AppHeader: React.FC = () => {
-  const { user, logout, isAuthenticated } = useStore();
+const SidebarLink = ({ 
+  to, 
+  icon: Icon, 
+  children, 
+  onClose 
+}: { 
+  to: string; 
+  icon: React.ElementType; 
+  children: React.ReactNode;
+  onClose?: () => void;
+}) => {
+  const location = useLocation();
+  const isActive = location.pathname === to;
+  
+  const handleClick = () => {
+    if (window.innerWidth < 1024) {
+      onClose?.();
+    }
+  };
   
   return (
-    <header className="bg-white shadow-sm">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16">
-          <div className="flex items-center">
-            <Link to="/" className="text-xl font-bold text-gray-900">
-              Expense Tracker
-            </Link>
-          </div>
-          
-          <nav className="flex space-x-4">
-            {isAuthenticated ? (
-              <>
-                <Link to="/dashboard" className="text-gray-700 hover:text-gray-900">
-                  Dashboard
-                </Link>
-                <Link to="/expenses" className="text-gray-700 hover:text-gray-900">
-                  Expenses
-                </Link>
-                <div className="flex items-center space-x-4">
-                  <span className="text-sm text-gray-700">
-                    {user?.name}
-                  </span>
-                  {user?.avatar && (
-                    <img
-                      src={user.avatar}
-                      alt={user.name}
-                      className="h-8 w-8 rounded-full"
-                    />
-                  )}
-                  <button
-                    onClick={logout}
-                    className="text-sm text-red-600 hover:text-red-800"
-                  >
-                    Logout
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <Link
-                  to="/login"
-                  className="text-gray-700 hover:text-gray-900"
-                >
-                  Login
-                </Link>
-                <Link
-                  to="/register"
-                  className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
-                >
-                  Sign Up
-                </Link>
-              </>
-            )}
-          </nav>
-        </div>
-      </div>
-    </header>
+    <Link
+      to={to}
+      onClick={handleClick}
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all hover:bg-accent",
+        isActive ? "bg-accent" : "transparent"
+      )}
+    >
+      <Icon className="h-4 w-4" />
+      <span>{children}</span>
+    </Link>
   );
 };
 
-const ErrorMessage: React.FC = () => {
-  const error = useStore((state) => state.error);
-  
-  if (!error) return null;
+const Sidebar = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => {
+  const { user, logout } = useStore();
   
   return (
-    <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-      {error}
-    </div>
+    <>
+      {/* Mobile overlay */}
+      <div 
+        className={cn(
+          "fixed inset-0 z-40 bg-background/80 backdrop-blur-sm lg:hidden",
+          isOpen ? "block" : "hidden"
+        )}
+        onClick={onClose}
+      />
+      
+      <div className={cn(
+        "fixed inset-y-0 left-0 z-50 flex w-64 flex-col bg-[hsl(var(--background))] border-r shadow-lg transition-transform duration-200 ease-in-out lg:static lg:translate-x-0",
+        !isOpen && "-translate-x-full"
+      )}>
+        {/* Organization Selector */}
+        <div className="flex items-center justify-between border-b p-4">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="w-full justify-between">
+                <div className="flex items-center gap-2">
+                  <Building2 className="h-4 w-4" />
+                  <span>Acme Inc</span>
+                </div>
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-60">
+              <DropdownMenuItem>
+                <Building2 className="mr-2 h-4 w-4" />
+                <span>Switch Organization</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          
+          <Button
+            variant="ghost"
+            size="icon"
+            className="lg:hidden"
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+
+        {/* Navigation */}
+        <div className="flex-1 space-y-1 p-4">
+          <div className="mb-4">
+            <h2 className="mb-2 px-3 text-xs font-semibold uppercase text-muted-foreground">Main</h2>
+            <div className="space-y-1">
+              <SidebarLink to="/dashboard" icon={LayoutDashboard} onClose={onClose}>Dashboard</SidebarLink>
+              <SidebarLink to="/expenses" icon={Receipt} onClose={onClose}>Expenses</SidebarLink>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <h2 className="mb-2 px-3 text-xs font-semibold uppercase text-muted-foreground">Settings</h2>
+            <div className="space-y-1">
+              <Link 
+                to="/settings" 
+                className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent"
+                onClick={() => {
+                  if (window.innerWidth < 1024) {
+                    onClose();
+                  }
+                }}
+              >
+                <Settings className="h-4 w-4" />
+                Settings
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* User Section */}
+        <div className="border-t p-4">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="w-full justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="h-6 w-6 rounded-full bg-accent" />
+                  <div className="flex flex-col items-start text-sm">
+                    <span>shadcn</span>
+                    <span className="text-xs text-muted-foreground">m@example.com</span>
+                  </div>
+                </div>
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-60">
+              <DropdownMenuItem>Profile</DropdownMenuItem>
+              <DropdownMenuItem>Settings</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={logout} className="text-destructive">Log Out</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    </>
   );
 };
 
 const AppShell: React.FC = () => {
-  const isAuthenticated = useStore((state) => state.isAuthenticated);
-  const location = useLocation();
-  const isAuthPage = ['/login', '/register'].includes(location.pathname);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 1024);
+
+  React.useEffect(() => {
+    const handleResize = () => {
+      setIsSidebarOpen(window.innerWidth >= 1024);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <AppHeader />
+    <div className="flex min-h-screen">
+      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
       
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Error/Success Messages */}
-        <div className="mb-4">
-          <ErrorMessage />
+      <main className="flex-1">
+        <div className="flex h-[73px] items-center gap-4 border-b bg-background px-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="lg:hidden"
+            onClick={() => setIsSidebarOpen(true)}
+          >
+            <Menu className="h-6 w-6" />
+          </Button>
         </div>
-
-        {/* Main Content */}
-        <div className="bg-white rounded-lg shadow-sm p-6">
+        <div className="flex-1 space-y-4 p-8 pt-6">
           <Outlet />
         </div>
       </main>
-
-      {/* Footer */}
-      <footer className="bg-white border-t mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <p className="text-center text-gray-500 text-sm">
-            © {new Date().getFullYear()} Expense Tracker. All rights reserved.
-          </p>
-        </div>
-      </footer>
     </div>
   );
 };
 
-export { AppShell };
+export default AppShell;

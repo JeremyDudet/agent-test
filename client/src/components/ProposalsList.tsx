@@ -1,6 +1,7 @@
-import React from 'react';
-import { Stack, Text, Button, Card, Group, Badge, NumberFormatter, ActionIcon, Modal, TextInput, Select } from '@mantine/core';
-import { IconCheck, IconX, IconEdit, IconClock } from '@tabler/icons-react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Check, X, Edit, Clock } from 'lucide-react';
 import { Proposal } from '../types';
 
 interface ProposalsListProps {
@@ -15,13 +16,13 @@ export function ProposalsList({ proposals, onApprove, onReject, onEdit, categori
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending_review':
-        return 'yellow';
+        return 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20';
       case 'confirmed':
-        return 'green';
+        return 'bg-green-500/10 text-green-500 border-green-500/20';
       case 'rejected':
-        return 'red';
+        return 'bg-red-500/10 text-red-500 border-red-500/20';
       default:
-        return 'gray';
+        return '';
     }
   };
 
@@ -29,98 +30,91 @@ export function ProposalsList({ proposals, onApprove, onReject, onEdit, categori
     return new Date(dateString).toLocaleDateString();
   };
 
+  const formatAmount = (amount: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(amount);
+  };
+
   return (
-    <Stack>
-      <Group position="apart" mb="md">
-        <Text size="xl" fw={700}>
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold">
           Expense Proposals
-        </Text>
-        <Badge size="lg" variant="light" color="blue">
+        </h2>
+        <Badge variant="secondary" className="text-base">
           {proposals.length} pending
         </Badge>
-      </Group>
+      </div>
       
       {proposals.length === 0 ? (
-        <Card withBorder p="xl" radius="md">
-          <Text c="dimmed" ta="center">
+        <Card>
+          <CardContent className="pt-6 text-center text-muted-foreground">
             No pending expense proposals. Start speaking to create some!
-          </Text>
+          </CardContent>
         </Card>
       ) : (
-        proposals.map((proposal) => (
-          <Card key={proposal.id} withBorder shadow="sm" radius="md" p="md">
-            <Group position="apart" mb="xs">
-              <Group>
-                <Text fw={500} size="lg">
-                  {proposal.merchant || 'Unnamed Expense'}
-                </Text>
-                <Badge color={getStatusColor(proposal.status)}>
-                  {proposal.status === 'pending_review' ? (
-                    <Group spacing={4}>
-                      <IconClock size={14} />
-                      <Text>Pending Review</Text>
-                    </Group>
-                  ) : (
-                    proposal.status
-                  )}
-                </Badge>
-              </Group>
-              <Text fw={700} size="xl">
-                <NumberFormatter
-                  value={proposal.amount}
-                  prefix="$"
-                  decimalScale={2}
-                  fixedDecimalScale
-                />
-              </Text>
-            </Group>
-            
-            <Group spacing="xl" mb="md">
-              <Text c="dimmed" size="sm">
-                Date: {formatDate(proposal.date)}
-              </Text>
-              <Text c="dimmed" size="sm">
-                Category: {proposal.category}
-              </Text>
-              {proposal.description && (
-                <Text c="dimmed" size="sm">
-                  Note: {proposal.description}
-                </Text>
-              )}
-            </Group>
-
-            <Group position="right" spacing="xs">
-              <ActionIcon
-                variant="light"
-                color="green"
-                size="lg"
-                onClick={() => onApprove(proposal)}
-                title="Approve"
-              >
-                <IconCheck size={20} />
-              </ActionIcon>
-              <ActionIcon
-                variant="light"
-                color="blue"
-                size="lg"
-                onClick={() => onEdit(proposal)}
-                title="Edit"
-              >
-                <IconEdit size={20} />
-              </ActionIcon>
-              <ActionIcon
-                variant="light"
-                color="red"
-                size="lg"
-                onClick={() => onReject(proposal)}
-                title="Reject"
-              >
-                <IconX size={20} />
-              </ActionIcon>
-            </Group>
-          </Card>
-        ))
+        <div className="space-y-4">
+          {proposals.map((proposal) => (
+            <Card key={proposal.id}>
+              <CardHeader>
+                <div className="flex justify-between items-start">
+                  <div className="space-y-1">
+                    <CardTitle>{proposal.merchant}</CardTitle>
+                    <CardDescription>{proposal.description}</CardDescription>
+                  </div>
+                  <span className="text-xl font-bold">
+                    {formatAmount(proposal.amount)}
+                  </span>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="flex justify-between items-center">
+                  <div className="flex gap-4 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <Clock className="h-4 w-4 opacity-70" />
+                      <span>{formatDate(proposal.date)}</span>
+                    </div>
+                    <Badge 
+                      variant="outline" 
+                      className={getStatusColor(proposal.status || 'pending_review')}
+                    >
+                      {proposal.status || 'Pending Review'}
+                    </Badge>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onEdit(proposal)}
+                    >
+                      <Edit className="h-4 w-4 mr-1" />
+                      Edit
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => onReject(proposal)}
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Reject
+                    </Button>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() => onApprove(proposal)}
+                    >
+                      <Check className="h-4 w-4 mr-1" />
+                      Accept
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       )}
-    </Stack>
+    </div>
   );
 }

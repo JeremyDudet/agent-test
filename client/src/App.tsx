@@ -1,14 +1,13 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { AppShell } from './components/AppShell';
+
+import AppShell from './components/AppShell';
 import { Login } from './components/Auth/Login';
 import { Register } from './components/Auth/Register';
 import { ProtectedRoute } from './components/Auth/ProtectedRoute';
+import { Dashboard } from './pages/Dashboard';
+import { Expenses } from './pages/Expenses';
 import useStore from './store/useStore';
-
-// Placeholder components - replace with your actual components
-const Dashboard = () => <div>Dashboard</div>;
-const Expenses = () => <div>Expenses</div>;
 
 const App: React.FC = () => {
   const isAuthenticated = useStore((state) => state.isAuthenticated);

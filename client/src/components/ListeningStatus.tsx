@@ -1,5 +1,5 @@
-import React from 'react';
-import { Group, Badge } from '@mantine/core';
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 interface ListeningStatusProps {
   isListening: boolean;
@@ -13,16 +13,25 @@ export function ListeningStatus({
   isInitializing,
 }: ListeningStatusProps) {
   return (
-    <Group>
-      <Badge color={isListening ? 'blue' : 'gray'}>
+    <div className="flex gap-2">
+      <Badge variant={isListening ? "default" : "secondary"}>
         {isListening ? 'Listening' : 'Not Listening'}
       </Badge>
-      {isInitializing && <Badge color="yellow">Initializing...</Badge>}
+      {isInitializing && (
+        <Badge variant="outline" className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20">
+          Initializing...
+        </Badge>
+      )}
       {isListening && !isInitializing && (
-        <Badge color={isRecording ? 'red' : 'blue'} variant={isRecording ? 'filled' : 'light'}>
+        <Badge 
+          variant={isRecording ? "destructive" : "default"}
+          className={cn(
+            isRecording && "animate-pulse"
+          )}
+        >
           {isRecording ? 'Recording' : 'Ready for voice'}
         </Badge>
       )}
-    </Group>
+    </div>
   );
 }

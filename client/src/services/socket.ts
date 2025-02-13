@@ -6,13 +6,19 @@ let socket: Socket | null = null;
 let isInitialized = false;
 
 export const initSocket = (token: string | undefined) => {
+  console.log('[SOCKET] Initializing socket with token:', token ? 'present' : 'missing');
+  
   if (socket) {
+    console.log('[SOCKET] Cleaning up existing socket connection');
     socket.close();
     socket = null;
     isInitialized = false;
   }
 
-  const newSocket = io(import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000', {
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+  console.log('[SOCKET] Connecting to backend URL:', backendUrl);
+
+  const newSocket = io(backendUrl, {
     transports: ['websocket'],
     auth: {
       token
@@ -21,20 +27,22 @@ export const initSocket = (token: string | undefined) => {
 
   // Connection error handling
   newSocket.on('connect', () => {
-    console.log('[SOCKET] Connected');
+    console.log('[SOCKET] Connected successfully');
     isInitialized = true;
     
     // Request existing proposals on connection
+    console.log('[SOCKET] Requesting existing proposals');
     newSocket.emit('loadExistingProposals');
   });
 
   newSocket.on('connect_error', (error) => {
-    console.error('[CLIENT] Socket connection error:', error);
+    console.error('[SOCKET] Connection error:', error.message);
+    console.error('[SOCKET] Full error:', error);
     isInitialized = false;
   });
 
   newSocket.on('disconnect', (reason) => {
-    console.error('[CLIENT] Socket disconnected:', reason);
+    console.error('[SOCKET] Disconnected. Reason:', reason);
     isInitialized = false;
   });
 

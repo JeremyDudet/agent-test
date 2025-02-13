@@ -3,10 +3,12 @@ import React, { useState, useRef, useEffect } from 'react';
 import RecordRTC from 'recordrtc';
 import VAD from 'voice-activity-detection';
 import { initSocket, getSocket, closeSocket, isSocketReady } from '../services/socket';
-import { Button, Stack, Alert, Text, Modal, TextInput, NumberInput } from '@mantine/core';
-import { ProposalsList } from './ProposalsList';
-import { ListeningStatus } from './ListeningStatus';
-import { mergePreRecordingBufferWithRecordedAudio } from '../services/audioMerging';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Check, X, Edit, Mic } from 'lucide-react';
 import type {
   Proposal,
   SemanticContext,
@@ -18,13 +20,104 @@ import type {
 } from '../types';
 import { useAuth } from './AuthProvider';
 import { useAppState } from '../hooks/useAppState';
+import { DialogTrigger } from "@/components/ui/dialog";
+import { mergePreRecordingBufferWithRecordedAudio } from '../services/audioMerging';
+import { cn } from "@/lib/utils";
+import { EditExpenseDialog } from './EditExpenseDialog';
 
 interface VADInstance {
   destroy: () => void;
 }
 
-export function AudioRecorder() {
+interface AudioRecorderProps {
+  isRecording?: boolean;
+}
+
+interface ListeningStatusProps {
+  isListening: boolean;
+  isProcessing: boolean;
+  isInitializing: boolean;
+  isVadInitializing: boolean;
+  isNoiseAnalyzing: boolean;
+  isRecording: boolean;
+}
+
+interface RecordButtonProps {
+  isRecording: boolean;
+  isProcessing: boolean;
+  isInitializing: boolean;
+  onClick: () => void;
+}
+
+function RecordButton({ isRecording, isProcessing, isInitializing, onClick }: RecordButtonProps) {
+  return (
+    <Button
+      size="lg"
+      variant="outline"
+      className={cn(
+        "relative h-24 w-24 rounded-full p-0 transition-all hover:scale-105",
+        isRecording && "border-red-500 bg-red-50 text-red-500 hover:border-red-600 hover:bg-red-100 hover:text-red-600",
+        isProcessing && "border-yellow-500 bg-yellow-50 text-yellow-500 hover:border-yellow-600 hover:bg-yellow-100 hover:text-yellow-600",
+        isInitializing && "animate-pulse"
+      )}
+      disabled={isInitializing}
+      onClick={onClick}
+    >
+      <div className="absolute inset-0 flex items-center justify-center">
+        {isRecording && (
+          <div className="absolute inset-0">
+            <div className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-20" />
+            <div className="absolute inline-flex rounded-full h-full w-full bg-red-500 opacity-10" />
+          </div>
+        )}
+        <Mic className={cn(
+          "h-10 w-10 transition-transform",
+          isRecording && "text-red-500 animate-pulse",
+          isProcessing && "text-yellow-500 animate-pulse",
+          isInitializing && "text-muted-foreground"
+        )} />
+      </div>
+    </Button>
+  );
+}
+
+const formatDate = (dateString: string) => {
+  return new Date(dateString).toLocaleDateString();
+};
+
+function ListeningStatus({ 
+  isListening,
+  isProcessing,
+  isInitializing,
+  isVadInitializing,
+  isNoiseAnalyzing,
+  isRecording 
+}: ListeningStatusProps) {
+  let status = "Ready";
+  if (isInitializing) status = "Initializing...";
+  if (isVadInitializing) status = "Calibrating microphone...";
+  if (isNoiseAnalyzing) status = "Analyzing background noise...";
+  if (isListening) status = "Listening...";
+  if (isRecording) status = "Recording...";
+  if (isProcessing) status = "Processing...";
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className={cn(
+        "h-2.5 w-2.5 rounded-full transition-colors duration-200",
+        isListening ? "bg-green-500 animate-pulse" : "bg-muted",
+        isRecording && "bg-red-500 animate-pulse",
+        isProcessing && "bg-yellow-500 animate-pulse"
+      )} />
+      <span className="text-sm font-medium">{status}</span>
+    </div>
+  );
+}
+
+export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorderProps) {
   const { session } = useAuth();
+  console.log('[DEBUG] AudioRecorder mounted, session:', session ? 'present' : 'missing', 'token:', session?.access_token ? 'present' : 'missing');
+  
   const { 
     state: {
       isProcessing,
@@ -36,6 +129,7 @@ export function AudioRecorder() {
       error,
       transcriptions,
       proposals,
+      userExpenseCategories
     },
     updateState,
     handleServerState,
@@ -613,56 +707,157 @@ export function AudioRecorder() {
     setEditProposalData(null);
   };
 
+  // Watch for external recording state changes
+  useEffect(() => {
+    if (externalIsRecording && !isListening) {
+      startListening();
+    } else if (!externalIsRecording && isListening) {
+      stopListening();
+    }
+  }, [externalIsRecording]);
+
   return (
-    <Stack gap="md" p="md">
-      <ListeningStatus
-        isListening={isListening}
-        isRecording={isVoiceActive}
-        isInitializing={isInitializing || isVadInitializing || isNoiseAnalyzing}
-      />
-      <Button
-        color={isListening ? 'red' : 'blue'}
-        onClick={isListening ? stopListening : startListening}
-        disabled={isInitializing || isVadInitializing || isNoiseAnalyzing}
-      >
-        {isInitializing || isVadInitializing ? 'Initializing...' : 
-         isNoiseAnalyzing ? 'Analyzing Background Noise...' : 
-         isListening ? 'Stop Listening' : 'Start Listening'}
-      </Button>
+    <div className="space-y-6">
       {error && (
-        <Alert color="red" title="Error" onClose={() => setError(null)}>
-          {error}
-        </Alert>
+        <div className="rounded-lg border-l-4 border-red-500 bg-red-100 p-4 text-red-700">
+          <p className="text-sm font-medium">{error}</p>
+        </div>
       )}
-      {transcriptions.map((text, index) => (
-        <Text key={index}>{text}</Text>
-      ))}
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <CardTitle>Record Expense</CardTitle>
+              <CardDescription>
+                Record your expenses by speaking naturally. For example: "I spent $42 on lunch at Subway today"
+              </CardDescription>
+            </div>
+            <ListeningStatus
+              isListening={isListening}
+              isProcessing={isProcessing}
+              isInitializing={isInitializing}
+              isVadInitializing={isVadInitializing}
+              isNoiseAnalyzing={isNoiseAnalyzing}
+              isRecording={isVoiceActive}
+            />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col items-center justify-center gap-4 py-6">
+            <RecordButton
+              isRecording={isVoiceActive}
+              isProcessing={isProcessing}
+              isInitializing={isInitializing || isVadInitializing || isNoiseAnalyzing}
+              onClick={() => {
+                if (isListening) {
+                  stopListening();
+                } else {
+                  startListening();
+                }
+              }}
+            />
+            <div className="text-center text-sm text-muted-foreground">
+              {isListening ? "Click to stop recording" : "Click to start recording"}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {transcriptions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <CardTitle>Transcription</CardTitle>
+                <CardDescription>Live transcription of your voice input</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {transcriptions.map((transcription, i) => (
+                <div
+                  key={i}
+                  className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground"
+                >
+                  {transcription}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {proposals.length > 0 && (
-        <ProposalsList proposals={proposals} onApprove={handleApprove} onReject={handleReject} onEdit={handleEdit} />
+        <Card>
+          <CardHeader>
+            <CardTitle>Expense Proposals</CardTitle>
+            <CardDescription>Review and manage your recorded expenses</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {proposals.map((proposal, index) => (
+              <Card key={index}>
+                <CardContent className="p-4">
+                  <div className="flex flex-col space-y-4">
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-1">
+                        <h4 className="text-sm font-medium">
+                          {proposal.merchant || 'Unnamed Expense'}
+                        </h4>
+                        <p className="text-sm text-muted-foreground">
+                          {proposal.description}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-bold">
+                          ${proposal.amount}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {formatDate(proposal.date)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleEdit(proposal)}
+                      >
+                        <Edit className="mr-2 h-4 w-4" />
+                        Edit
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => handleReject(proposal)}
+                      >
+                        <X className="mr-2 h-4 w-4" />
+                        Reject
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => handleApprove(proposal)}
+                      >
+                        <Check className="mr-2 h-4 w-4" />
+                        Accept
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </CardContent>
+        </Card>
       )}
-      <Modal opened={!!editingProposal} onClose={handleCancelEdit} title="Edit Proposal">
-        {editProposalData && (
-          <Stack>
-            <NumberInput
-              label="Amount"
-              value={editProposalData.amount}
-              onChange={(val) => setEditProposalData({ ...editProposalData, amount: Number(val) })}
-            />
-            <TextInput
-              label="Date"
-              value={editProposalData.date}
-              onChange={(e) => setEditProposalData({ ...editProposalData, date: e.target.value })}
-            />
-            <TextInput
-              label="Category"
-              value={editProposalData.category}
-              onChange={(e) => setEditProposalData({ ...editProposalData, category: e.target.value })}
-            />
-            <Button onClick={handleSaveEdit}>Save</Button>
-            <Button variant="outline" onClick={handleCancelEdit}>Cancel</Button>
-          </Stack>
-        )}
-      </Modal>
-    </Stack>
+
+      <EditExpenseDialog
+        proposal={editingProposal}
+        onClose={handleCancelEdit}
+        onSave={handleSaveEdit}
+        categories={userExpenseCategories}
+      />
+    </div>
   );
 }
