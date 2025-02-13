@@ -1,3 +1,4 @@
+// Database types
 export interface Conversation {
   id: string;
   userId: string;
@@ -15,4 +16,6 @@ export interface Message {
   content: string;
   createdAt?: string;
   sequenceNumber?: number;
-} 
+}
+
+// ... rest of existing types ... 

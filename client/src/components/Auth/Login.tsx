@@ -7,16 +7,6 @@ interface LocationState {
   from?: string;
 }
 
-interface LoginResponse {
-  user: {
-    id: string;
-    email: string;
-    name: string;
-    avatar?: string;
-  };
-  token: string;
-}
-
 export const Login: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -47,14 +37,8 @@ export const Login: React.FC = () => {
         throw new Error('Invalid response from server');
       }
 
-      const userData = {
-        id: data.user.id,
-        email: data.user.email!,
-        name: data.user.user_metadata.name || data.user.email!.split('@')[0],
-        avatar: data.user.user_metadata.avatar,
-      };
-
-      login(userData, data.session.access_token);
+      // The AuthProvider will handle the login state
+      // We don't need to call login() here as it will be handled by the onAuthStateChange listener
       navigate(from, { replace: true });
     } catch (error) {
       console.error('Login error:', error);

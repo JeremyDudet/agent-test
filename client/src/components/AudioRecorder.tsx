@@ -41,6 +41,7 @@ interface VADInstance {
 
 interface AudioRecorderProps {
   isRecording?: boolean;
+  onConversationEntriesChange?: (entries: TranscriptionEntry[]) => void;
 }
 
 interface ListeningStatusProps {
@@ -151,37 +152,32 @@ function ListeningStatus({
   );
 }
 
-interface TranscriptionEntry {
+export interface TranscriptionEntry {
   type: 'transcription' | 'ai_thought';
   content: string;
   timestamp: string;
 }
 
-function DrawerTranscription({ 
-  entries,
-  isProcessing 
-}: { 
+interface DrawerTranscriptionProps {
   entries: TranscriptionEntry[];
   isProcessing: boolean;
-}) {
+  drawerTrigger?: React.ReactNode;
+}
+
+export function DrawerTranscription({ 
+  entries,
+  isProcessing,
+  drawerTrigger 
+}: DrawerTranscriptionProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
     <Drawer open={isOpen} onOpenChange={setIsOpen}>
-      <DrawerTrigger asChild>
-        <Button 
-          variant="outline" 
-          className="fixed bottom-4 right-4 shadow-lg z-50 gap-2"
-        >
-          <MessageSquare className="h-4 w-4" />
-          Conversation History
-          {isProcessing && (
-            <div className="ml-2">
-              <ThinkingIndicator isProcessing={isProcessing} />
-            </div>
-          )}
-        </Button>
-      </DrawerTrigger>
+      {drawerTrigger ? (
+        <DrawerTrigger asChild>
+          {drawerTrigger}
+        </DrawerTrigger>
+      ) : null}
       <DrawerContent>
         <div className="mx-auto w-full max-w-2xl">
           <DrawerHeader className="border-b border-border">
@@ -245,7 +241,7 @@ function DrawerTranscription({
   );
 }
 
-export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorderProps) {
+export function AudioRecorder({ isRecording: externalIsRecording, onConversationEntriesChange }: AudioRecorderProps) {
   const { session } = useAuth();
   console.log('[DEBUG] AudioRecorder mounted, session:', session ? 'present' : 'missing', 'token:', session?.access_token ? 'present' : 'missing');
   
@@ -587,11 +583,13 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
 
       if (nextChunk.transcription) {
         addTranscription(nextChunk.transcription);
-        setConversationEntries(prev => [...prev, {
-          type: 'transcription',
-          content: nextChunk.transcription!,
+        const newEntries = [...conversationEntries, {
+          type: 'transcription' as const,
+          content: nextChunk.transcription,
           timestamp: new Date().toLocaleTimeString()
-        }]);
+        }];
+        setConversationEntries(newEntries);
+        onConversationEntriesChange?.(newEntries);
       }
 
       pending.delete(nextExpectedSequenceRef.current);
@@ -752,11 +750,13 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
       console.log('[SOCKET] Transcription received:', response);
       if (response.transcription) {
         addTranscription(response.transcription);
-        setConversationEntries(prev => [...prev, {
-          type: 'transcription',
-          content: response.transcription!,
+        const newEntries = [...conversationEntries, {
+          type: 'transcription' as const,
+          content: response.transcription,
           timestamp: new Date().toLocaleTimeString()
-        }]);
+        }];
+        setConversationEntries(newEntries);
+        onConversationEntriesChange?.(newEntries);
       }
     };
 
@@ -764,11 +764,13 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
       console.log('[SOCKET] Proposals update received:', data);
       updateProposals(data.proposals);
       // Add AI thought entry when proposals are received
-      setConversationEntries(prev => [...prev, {
-        type: 'ai_thought',
+      const newEntries = [...conversationEntries, {
+        type: 'ai_thought' as const,
         content: `Analyzed expense patterns and generated ${data.proposals.length} proposal${data.proposals.length === 1 ? '' : 's'}.`,
         timestamp: new Date().toLocaleTimeString()
-      }]);
+      }];
+      setConversationEntries(newEntries);
+      onConversationEntriesChange?.(newEntries);
     };
 
     const handleStateChanged = (serverState: AgentState) => {
@@ -806,7 +808,7 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
       }
       closeSocket();
     };
-  }, [session]);
+  }, [session, onConversationEntriesChange]);
 
   const handleApprove = (proposal: Proposal) => {
     if (!isSocketReady()) {
