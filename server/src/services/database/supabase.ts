@@ -4,7 +4,7 @@ import { config } from 'dotenv';
 config();
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error('Missing Supabase credentials in environment variables');
+  throw new Error('Supabase environment variables are not set');
 }
 
 // Use service role key for database operations to bypass RLS

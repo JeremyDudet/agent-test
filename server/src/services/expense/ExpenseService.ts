@@ -2,102 +2,114 @@ import { format } from "date-fns";
 import type { ActionParameters } from "../../types";
 import { supabase } from "../database/supabase";
 import type { ExpenseCategory } from "../../core/StateManager";
+import { ExpenseModel } from '../../models/expense/ExpenseModel';
+import { ExpenseCreateDTO, ExpenseUpdateDTO, Expense } from '../../types';
+import { AppError } from '../../middleware/error/errorHandler';
+import { openai } from '../ai/openai';
 
 export class ExpenseService {
-  static async addExpense(params: ActionParameters): Promise<any> {
+  constructor(private readonly expenseModel: ExpenseModel) {}
+
+  async createExpense(userId: string, data: ExpenseCreateDTO): Promise<Expense> {
+    // Validate category exists
+    await this.validateCategory(data.category);
+    
+    // Check for duplicate expenses
+    const similarExpenses = await this.expenseModel.findSimilar(
+      userId,
+      data.item,
+      data.amount,
+      data.date
+    );
+
+    if (similarExpenses.length > 0) {
+      throw new AppError(
+        'Similar expense already exists',
+        400,
+        'DUPLICATE_EXPENSE'
+      );
+    }
+
+    return this.expenseModel.create(userId, data);
+  }
+
+  async updateExpense(userId: string, data: ExpenseUpdateDTO): Promise<Expense> {
+    // Verify expense exists and belongs to user
+    const existing = await this.expenseModel.findById(userId, data.id);
+    if (!existing) {
+      throw new AppError('Expense not found', 404, 'NOT_FOUND');
+    }
+
+    if (data.category) {
+      await this.validateCategory(data.category);
+    }
+
+    return this.expenseModel.update(userId, data);
+  }
+
+  async deleteExpense(userId: string, id: string): Promise<void> {
+    const existing = await this.expenseModel.findById(userId, id);
+    if (!existing) {
+      throw new AppError('Expense not found', 404, 'NOT_FOUND');
+    }
+
+    await this.expenseModel.delete(userId, id);
+  }
+
+  async getExpenseById(userId: string, id: string): Promise<Expense> {
+    const expense = await this.expenseModel.findById(userId, id);
+    if (!expense) {
+      throw new AppError('Expense not found', 404, 'NOT_FOUND');
+    }
+    return expense;
+  }
+
+  async getExpenses(userId: string, options: {
+    limit?: number;
+    offset?: number;
+    startDate?: string;
+    endDate?: string;
+    category?: string;
+  } = {}): Promise<{ expenses: Expense[]; total: number }> {
+    if (options.category) {
+      await this.validateCategory(options.category);
+    }
+    return this.expenseModel.findAll(userId, options);
+  }
+
+  async categorizeExpense(description: string): Promise<string> {
     try {
-      // Validate required parameters
-      if (!params.amount || !params.description || !params.category) {
-        throw new Error("Missing required expense parameters");
-      }
-
-      const date = params.date ? new Date(params.date) : new Date();
-
-      // Generate embedding
-      try {
-        const { data: embedding, error: embeddingError } =
-          await supabase.functions.invoke("generate-embedding", {
-            body: { text: params.description },
-          });
-
-        if (embeddingError || !embedding) {
-          throw new Error("Failed to generate embedding");
-        }
-
-        // Handle category
-        let category_id = params.category_id;
-
-        // Handle new category suggestion
-        if (!category_id && params.isNewCategory) {
-          throw {
-            code: "NEEDS_CATEGORY_CONFIRMATION",
-            suggestedCategory: params.category,
-            reasoning: params.categoryReasoning,
-            originalParams: params,
-          };
-        }
-
-        // Create new category if needed
-        if (!category_id && params.category) {
-          const { data: newCategory, error: categoryError } = await supabase
-            .from("categories")
-            .insert({
-              name: params.category,
-              description:
-                params.categoryDescription || params.categoryReasoning || null,
-            })
-            .select("id")
-            .single();
-
-          if (categoryError) {
-            throw new Error("Failed to create category");
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+          {
+            role: "system",
+            content: "You are a helpful assistant that categorizes expenses. Respond with only the category name."
+          },
+          {
+            role: "user",
+            content: `Categorize this expense: ${description}`
           }
-          category_id = newCategory.id;
-        }
+        ],
+        temperature: 0.3,
+        max_tokens: 10
+      });
 
-        const expense = {
-          id: crypto.randomUUID(),
-          amount: params.amount,
-          description: params.description,
-          category_id,
-          date: date.toISOString(),
-          merchant: params.merchant || null,
-          tags: params.tags || [],
-          metadata: params.metadata || {},
-          date_created: new Date().toISOString(),
-          description_embedding: embedding,
-        };
-
-        const { data, error } = await supabase
-          .from("expenses")
-          .insert(expense)
-          .select()
-          .single();
-
-        if (error) {
-          throw new Error("Failed to insert expense");
-        }
-
-        return data;
-      } catch (error) {
-        // Special handling for category confirmation
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          error.code === "NEEDS_CATEGORY_CONFIRMATION"
-        ) {
-          throw error;
-        }
-
-        // Handle other errors
-        throw new Error("Failed to add expense");
-      }
+      return completion.choices[0]?.message?.content?.trim() || 'Uncategorized';
     } catch (error) {
-      throw new Error(
-        `Failed to add expense: ${
-          error instanceof Error ? error.message : String(error)
-        }`
+      console.error('Error categorizing expense:', error);
+      return 'Uncategorized';
+    }
+  }
+
+  private async validateCategory(category: string): Promise<void> {
+    // Here you would typically check against a list of valid categories
+    const validCategories = ['Food & Dining', 'Transportation', 'Shopping', 'Bills & Utilities', 'Other'];
+    if (!validCategories.includes(category)) {
+      throw new AppError(
+        'Invalid category',
+        400,
+        'INVALID_CATEGORY'
       );
     }
   }

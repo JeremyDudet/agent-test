@@ -77,10 +77,12 @@ export class TranscriptionOrderManager extends EventEmitter {
       });
 
       // Process the transcription through the agent
+      console.log("[TRANSCRIPTION ORDER MANAGER] Processing transcription:", combinedTranscript);
       const proposals = await this.agent.processLatestTranscription(
         combinedTranscript,
         state
       );
+      console.log("[TRANSCRIPTION ORDER MANAGER] Generated proposals:", proposals);
 
       if (proposals.length > 0) {
         // Persist each proposal to the database with pending_review status

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Check, X, Edit, Mic } from 'lucide-react';
+import { Check, X, Edit, Mic, ChevronDown, ChevronRight, Brain } from 'lucide-react';
 import type {
   Proposal,
   SemanticContext,
@@ -42,6 +42,27 @@ interface ListeningStatusProps {
   isRecording: boolean;
 }
 
+interface ThinkingIndicatorProps {
+  isProcessing: boolean;
+}
+
+function ThinkingIndicator({ isProcessing }: ThinkingIndicatorProps) {
+  if (!isProcessing) return null;
+  
+  return (
+    <div className="flex items-center gap-2 rounded-lg border bg-muted/50 px-3 py-2">
+      <div className="flex items-center gap-1">
+        <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+        <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse delay-150" />
+        <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse delay-300" />
+      </div>
+      <span className="text-sm font-medium text-muted-foreground">
+        Processing your expense...
+      </span>
+    </div>
+  );
+}
+
 interface RecordButtonProps {
   isRecording: boolean;
   isProcessing: boolean;
@@ -55,7 +76,8 @@ function RecordButton({ isRecording, isProcessing, isInitializing, onClick }: Re
       size="lg"
       variant="outline"
       className={cn(
-        "relative h-24 w-24 rounded-full p-0 transition-all hover:scale-105",
+        "relative h-24 w-24 rounded-full p-0 transition-all duration-300 ease-in-out",
+        "hover:scale-105 active:scale-95",
         isRecording && "border-red-500 bg-red-50 text-red-500 hover:border-red-600 hover:bg-red-100 hover:text-red-600",
         isProcessing && "border-yellow-500 bg-yellow-50 text-yellow-500 hover:border-yellow-600 hover:bg-yellow-100 hover:text-yellow-600",
         isInitializing && "animate-pulse"
@@ -63,17 +85,22 @@ function RecordButton({ isRecording, isProcessing, isInitializing, onClick }: Re
       disabled={isInitializing}
       onClick={onClick}
     >
-      <div className="absolute inset-0 flex items-center justify-center">
+      <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
         {isRecording && (
-          <div className="absolute inset-0">
-            <div className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-20" />
-            <div className="absolute inline-flex rounded-full h-full w-full bg-red-500 opacity-10" />
-          </div>
+          <>
+            <div className="absolute inset-0">
+              <div className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-20" />
+              <div className="absolute inline-flex rounded-full h-full w-full bg-red-500 opacity-10" />
+            </div>
+            <div className="absolute inset-0">
+              <div className="animate-ripple absolute inline-flex h-full w-full rounded-full border-4 border-red-500/30" />
+            </div>
+          </>
         )}
         <Mic className={cn(
-          "h-10 w-10 transition-transform",
-          isRecording && "text-red-500 animate-pulse",
-          isProcessing && "text-yellow-500 animate-pulse",
+          "h-10 w-10 transition-all duration-300 ease-in-out",
+          isRecording && "text-red-500 animate-bounce scale-110",
+          isProcessing && "text-yellow-500 animate-pulse scale-105",
           isInitializing && "text-muted-foreground"
         )} />
       </div>
@@ -114,6 +141,83 @@ function ListeningStatus({
   );
 }
 
+interface TranscriptionEntry {
+  type: 'transcription' | 'ai_thought';
+  content: string;
+  timestamp: string;
+}
+
+function CollapsibleTranscription({ 
+  entries,
+  isProcessing 
+}: { 
+  entries: TranscriptionEntry[];
+  isProcessing: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(true);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div 
+          className="flex items-center justify-between cursor-pointer"
+          onClick={() => setIsOpen(!isOpen)}
+        >
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2">
+              Conversation History
+              <Button 
+                variant="ghost" 
+                size="sm"
+                className="h-6 w-6 p-0"
+              >
+                {isOpen ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </Button>
+            </CardTitle>
+            <CardDescription>Live transcription and AI analysis</CardDescription>
+          </div>
+          <ThinkingIndicator isProcessing={isProcessing} />
+        </div>
+      </CardHeader>
+      {isOpen && (
+        <CardContent>
+          <div className="space-y-4">
+            {entries.map((entry, i) => (
+              <div
+                key={i}
+                className={cn(
+                  "rounded-lg p-3 text-sm",
+                  entry.type === 'transcription' 
+                    ? "bg-muted/50 text-muted-foreground"
+                    : "bg-primary/10 text-primary-foreground"
+                )}
+              >
+                <div className="flex items-start gap-2">
+                  {entry.type === 'transcription' ? (
+                    <Mic className="h-4 w-4 mt-1 flex-shrink-0" />
+                  ) : (
+                    <Brain className="h-4 w-4 mt-1 flex-shrink-0" />
+                  )}
+                  <div className="flex-1">
+                    <div className="text-xs text-muted-foreground mb-1">
+                      {entry.timestamp}
+                    </div>
+                    {entry.content}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
 export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorderProps) {
   const { session } = useAuth();
   console.log('[DEBUG] AudioRecorder mounted, session:', session ? 'present' : 'missing', 'token:', session?.access_token ? 'present' : 'missing');
@@ -143,6 +247,7 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
   const [editingProposal, setEditingProposal] = useState<Proposal | null>(null);
   const [editProposalData, setEditProposalData] = useState<{ amount: number; date: string; category: string } | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [conversationEntries, setConversationEntries] = useState<TranscriptionEntry[]>([]);
 
   const semanticContextRef = useRef<SemanticContext>({
     timestamp: 0,
@@ -306,7 +411,7 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
         // VAD configuration parameters
         bufferLen: 1024,
         avgNoiseMultiplier: 1.5,
-        minNoiseLevel: 0.4, // Reduced sensitivity
+        minNoiseLevel: 0.3, // Reduced sensitivity
         maxNoiseLevel: 0.7, // Increased range
         minCaptureFreq: 85, // Voice frequency range
         maxCaptureFreq: 255,
@@ -455,6 +560,11 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
 
       if (nextChunk.transcription) {
         addTranscription(nextChunk.transcription);
+        setConversationEntries(prev => [...prev, {
+          type: 'transcription',
+          content: nextChunk.transcription!,
+          timestamp: new Date().toLocaleTimeString()
+        }]);
       }
 
       pending.delete(nextExpectedSequenceRef.current);
@@ -615,12 +725,23 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
       console.log('[SOCKET] Transcription received:', response);
       if (response.transcription) {
         addTranscription(response.transcription);
+        setConversationEntries(prev => [...prev, {
+          type: 'transcription',
+          content: response.transcription!,
+          timestamp: new Date().toLocaleTimeString()
+        }]);
       }
     };
 
     const handleProposals = (data: { proposals: Proposal[] }) => {
       console.log('[SOCKET] Proposals update received:', data);
       updateProposals(data.proposals);
+      // Add AI thought entry when proposals are received
+      setConversationEntries(prev => [...prev, {
+        type: 'ai_thought',
+        content: `Analyzed expense patterns and generated ${data.proposals.length} proposal${data.proposals.length === 1 ? '' : 's'}.`,
+        timestamp: new Date().toLocaleTimeString()
+      }]);
     };
 
     const handleStateChanged = (serverState: AgentState) => {
@@ -764,92 +885,11 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
         </CardContent>
       </Card>
 
-      {transcriptions.length > 0 && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <CardTitle>Transcription</CardTitle>
-                <CardDescription>Live transcription of your voice input</CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {transcriptions.map((transcription, i) => (
-                <div
-                  key={i}
-                  className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground"
-                >
-                  {transcription}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {proposals.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Expense Proposals</CardTitle>
-            <CardDescription>Review and manage your recorded expenses</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {proposals.map((proposal, index) => (
-              <Card key={index}>
-                <CardContent className="p-4">
-                  <div className="flex flex-col space-y-4">
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-1">
-                        <h4 className="text-sm font-medium">
-                          {proposal.merchant || 'Unnamed Expense'}
-                        </h4>
-                        <p className="text-sm text-muted-foreground">
-                          {proposal.description}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold">
-                          ${proposal.amount}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          {formatDate(proposal.date)}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-end gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleEdit(proposal)}
-                      >
-                        <Edit className="mr-2 h-4 w-4" />
-                        Edit
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => handleReject(proposal)}
-                      >
-                        <X className="mr-2 h-4 w-4" />
-                        Reject
-                      </Button>
-                      <Button
-                        variant="default"
-                        size="sm"
-                        onClick={() => handleApprove(proposal)}
-                      >
-                        <Check className="mr-2 h-4 w-4" />
-                        Accept
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </CardContent>
-        </Card>
+      {conversationEntries.length > 0 && (
+        <CollapsibleTranscription
+          entries={conversationEntries}
+          isProcessing={isProcessing}
+        />
       )}
 
       <EditExpenseDialog

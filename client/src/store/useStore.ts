@@ -161,19 +161,33 @@ const useStore = create<Store>()(
           newMessages: [],
         },
         addProcessedMessage: (message) =>
-          set((state) => ({
-            messageWindow: {
-              ...state.messageWindow,
-              processedMessages: [...state.messageWindow.processedMessages, message],
-            },
-          })),
+          set((state) => {
+            // Validate message content
+            const content = message.content.trim();
+            if (content.length <= 1 || /^[.\s]*$/.test(content)) {
+              return state; // Return unchanged state for invalid messages
+            }
+            return {
+              messageWindow: {
+                ...state.messageWindow,
+                processedMessages: [...state.messageWindow.processedMessages, message],
+              },
+            };
+          }),
         addNewMessage: (message) =>
-          set((state) => ({
-            messageWindow: {
-              ...state.messageWindow,
-              newMessages: [...state.messageWindow.newMessages, message],
-            },
-          })),
+          set((state) => {
+            // Validate message content
+            const content = message.content.trim();
+            if (content.length <= 1 || /^[.\s]*$/.test(content)) {
+              return state; // Return unchanged state for invalid messages
+            }
+            return {
+              messageWindow: {
+                ...state.messageWindow,
+                newMessages: [...state.messageWindow.newMessages, message],
+              },
+            };
+          }),
         clearNewMessages: () =>
           set((state) => ({
             messageWindow: {

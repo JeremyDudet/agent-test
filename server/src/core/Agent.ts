@@ -2,6 +2,7 @@
 import { OpenAI } from "openai";
 import { TavilyAPI } from "../services/search/TavilyAPI";
 import { StateManager, type AgentState } from "./StateManager";
+import { supabase } from "../services/database/supabase";
 
 export interface ExpenseProposal {
   id: string;
@@ -34,70 +35,65 @@ export class ExpenseAgent {
     });
   }
 
-  // // this is a tool for the agent to use to research expenses, if
-  // private async researchExpenseTool(description: string): Promise<string> {
-  //   try {
-  //     if (!process.env.TAVILY_API_KEY) {
-  //       console.log(
-  //         "Tavily API key not found, skipping research",
-  //         "ActionProposalAgent"
-  //       );
-  //       return "";
-  //     }
+  private async findSimilarExpenses(description: string, amount: number, date: string): Promise<any[]> {
+    try {
+      const embeddings = await this.openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: description,
+      });
 
-  //     const searchResults = await this.tavilyAPI.search(
-  //       `${description} expense category type`
-  //     );
+      const embedding = embeddings.data[0]?.embedding;
+      if (!embedding) {
+        throw new Error("Failed to generate embedding for similarity check");
+      }
 
-  //     return `Research Results: ${searchResults.results
-  //       .map((result) => result.content)
-  //       .join("\n")}`;
-  //   } catch (error) {
-  //     console.log(
-  //       "Research failed, continuing without research context",
-  //       "ActionProposalAgent",
-  //       {
-  //         description,
-  //         error: error instanceof Error ? error.message : String(error),
-  //       }
-  //     );
-  //     return "";
-  //   }
-  // }
+      // Search for similar expenses using vector similarity
+      const { data: similarExpenses, error } = await supabase.rpc(
+        "search_expenses",
+        {
+          query_embedding: embedding,
+          similarity_threshold: 0.6, // Lower threshold for less strict matching
+          match_count: 5,
+        }
+      );
 
-  // private calculateDate(relativeDate: string): string {
-  //   if (relativeDate === "today") {
-  //     return new Date().toISOString().split("T")[0];
-  //   }
+      if (error) {
+        console.error("Error finding similar expenses:", error);
+        return [];
+      }
 
-  //   const parts = relativeDate.split(" ");
-  //   if (parts.length >= 2) {
-  //     const amount = parseInt(parts[0]);
-  //     const unit = parts[1];
-  //     const now = new Date();
+      // Filter further by amount similarity (within 20%) and date proximity (within 2 days)
+      const dateThreshold = 2 * 24 * 60 * 60 * 1000; // 2 days in milliseconds
+      const targetDate = new Date(date).getTime();
+      const targetAmount = amount;
 
-  //     if (unit.includes("year")) {
-  //       return subMonths(now, amount * 12)
-  //         .toISOString()
-  //         .split("T")[0];
-  //     } else if (unit.includes("month")) {
-  //       return subMonths(now, amount).toISOString().split("T")[0];
-  //     } else if (unit.includes("day")) {
-  //       return subDays(now, amount).toISOString().split("T")[0];
-  //     }
-  //   }
+      const filteredExpenses = similarExpenses.filter((expense: any) => {
+        const amountDiffPercent = Math.abs((expense.amount - targetAmount) / targetAmount);
+        const dateDiff = Math.abs(new Date(expense.date).getTime() - targetDate);
+        const isAmountSimilar = amountDiffPercent <= 0.2;
+        const isDateClose = dateDiff <= dateThreshold;
 
-  //   // If it's already a date string, ensure it's in YYYY-MM-DD format
-  //   try {
-  //     const date = new Date(relativeDate);
-  //     return date.toISOString().split("T")[0];
-  //   } catch {
-  //     return new Date().toISOString().split("T")[0]; // fallback to today
-  //   }
-  // }
+        console.log(`[SIMILARITY CHECK] Comparing expense:`, {
+          description: expense.description,
+          amount: expense.amount,
+          date: expense.date,
+          amountDiffPercent,
+          dateDiff: dateDiff / (24 * 60 * 60 * 1000), // Convert to days for logging
+          isAmountSimilar,
+          isDateClose
+        });
+
+        return isAmountSimilar && isDateClose;
+      });
+
+      return filteredExpenses;
+    } catch (error) {
+      console.error("Error in findSimilarExpenses:", error);
+      return [];
+    }
+  }
 
   // main handler for transcript inputs to the agent
-  // we pass the latest transcript and the state (current date, existing categories, previously generated proposals, previous transcriptions) to the agent to edit exisiting or generate new proposals.
   async processLatestTranscription(
     newTranscript: string,
     state: AgentState
@@ -112,7 +108,7 @@ export class ExpenseAgent {
       // Construct the system message with all context
       const systemMessage = {
         role: "system",
-        content: `You are an AI expense tracking assistant. Your task is to analyze conversations and generate or update expense proposals.
+        content: `You are an AI expense tracking assistant. Your task is to analyze conversations and generate or update expense proposals with high accuracy and minimal duplicates.
 
 Current Context:
 - Time: ${timeContext.formattedNow}
@@ -124,15 +120,23 @@ ${processedMessages.map((m) => `${m.role}: ${m.content}`).join("\n")}
 
 Current Proposals:
 ${existingProposals
-  .map((p) => `- ${p.action}: ${p.item} ($${p.amount}) [${p.status}]`)
+  .map((p) => `- ${p.action}: ${p.item} ($${p.amount}) [${p.status}] on ${p.date}`)
   .join("\n")}
+
+Guidelines for Expense Detection:
+1. Only generate proposals for clear, explicit mentions of expenses
+2. Avoid duplicating expenses that are similar in amount, merchant, and date
+3. Be specific with merchant names and categories
+4. Extract exact amounts when available
+5. Default to today's date only if the expense is clearly recent
+6. If a date is ambiguous or not mentioned, ask for clarification instead of guessing
+7. If an expense seems similar to an existing proposal, skip it to avoid duplicates
+8. For recurring expenses, ensure they are actually different instances
 
 Based on the new transcript, either:
 1. Generate new expense proposals
 2. Modify existing proposals
-3. Return empty array if no changes needed
-
-If any changes were made at all, please return the entire array of proposals.
+3. Return empty array if no changes needed or if expenses seem like duplicates
 
 Response must be a JSON array of ExpenseProposal objects.
 
@@ -151,9 +155,7 @@ Example JSON structure:
       "created_at": "2024-02-14T12:00:00Z"
     }
   ]
-}
-
-`,
+}`,
       };
 
       // Call OpenAI API
@@ -182,25 +184,64 @@ Example JSON structure:
       const result = JSON.parse(content);
       let proposals: ExpenseProposal[] = [];
 
+      console.log("[AGENT] OpenAI generated result:", result);
+
       if (result.proposals && Array.isArray(result.proposals)) {
-        proposals = result.proposals.map((p: ExpenseProposal) => ({
-          id: p.id || crypto.randomUUID(),
-          status: p.status || "draft",
-          action: p.action,
-          item: p.item,
-          amount: p.amount,
-          date: p.date || timeContext.formattedNow,
-          category: p.category,
-          originalText: newTranscript,
-          created_at: new Date().toISOString(),
-        }));
+        // Process each proposal with similarity checking
+        for (const p of result.proposals) {
+          console.log("[AGENT] Processing proposal:", p);
+          
+          // Check for similar existing expenses in database
+          const similarExpenses = await this.findSimilarExpenses(
+            p.item,
+            p.amount,
+            p.date || timeContext.formattedNow
+          );
+
+          // Skip if we found similar expenses in database
+          if (similarExpenses.length > 0) {
+            console.log(`[AGENT] Skipping duplicate expense (found in database): ${p.item} ($${p.amount})`, {
+              similarExpenses
+            });
+            continue;
+          }
+
+          // Check for similar proposals in current batch
+          const similarInBatch = proposals.some(existing => {
+            const amountDiffPercent = Math.abs((existing.amount - p.amount) / p.amount);
+            return amountDiffPercent <= 0.2; // If amounts are within 20%, consider it a duplicate
+          });
+
+          if (similarInBatch) {
+            console.log(`[AGENT] Skipping duplicate expense (found in current batch): ${p.item} ($${p.amount})`);
+            continue;
+          }
+
+          console.log(`[AGENT] Adding new proposal: ${p.item} ($${p.amount})`);
+
+          // Add the proposal if no duplicates found
+          proposals.push({
+            id: p.id || crypto.randomUUID(),
+            status: p.status || "draft",
+            action: p.action,
+            item: p.item,
+            amount: p.amount,
+            date: p.date || timeContext.formattedNow,
+            category: p.category,
+            originalText: newTranscript,
+            created_at: new Date().toISOString(),
+          });
+        }
       }
 
       // Update state with new proposals if any were generated
       if (proposals.length > 0) {
+        console.log("[AGENT] Generated proposals:", proposals);
         this.stateManager.updateState({
           existingProposals: [...state.existingProposals, ...proposals],
         });
+      } else {
+        console.log("[AGENT] No new proposals generated");
       }
 
       return proposals;

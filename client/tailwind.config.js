@@ -80,11 +80,16 @@ module.exports = {
   			"accordion-up": {
   				from: { height: "var(--radix-accordion-content-height)" },
   				to: { height: 0 }
-  			}
+  			},
+        "ripple": {
+          "0%": { transform: "scale(0.8)", opacity: "1" },
+          "100%": { transform: "scale(2.4)", opacity: "0" }
+        }
   		},
   		animation: {
   			"accordion-down": "accordion-down 0.2s ease-out",
-  			"accordion-up": "accordion-up 0.2s ease-out"
+  			"accordion-up": "accordion-up 0.2s ease-out",
+        "ripple": "ripple 1.5s cubic-bezier(0, 0.2, 0.8, 1) infinite"
   		}
   	}
   },

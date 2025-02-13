@@ -109,10 +109,16 @@ export class StateManager extends EventEmitter {
     this.emit("stateChanged", this.state);
   }
 
+  private isValidMessage(message: Message): boolean {
+    const content = message.content.trim();
+    // Filter out empty messages, single characters, or just dots
+    return content.length > 1 && !/^[.\s]*$/.test(content);
+  }
+
   // append a message to the processed messages
   appendToProcessedMessages(message: Message): void {
     // Validate state exists
-    if (!this.state) {
+    if (!this.state || !this.isValidMessage(message)) {
       return;
     }
 

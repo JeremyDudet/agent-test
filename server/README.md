@@ -117,44 +117,45 @@ create index expenses_date_idx on expenses(date);
 create index expenses_amount_idx on expenses(amount);
 create index expenses_description_trgm_idx on expenses using gin (description gin_trgm_ops);
 create index expenses_embedding_idx on expenses using ivfflat (embedding vector_cosine_ops);
+
+-- Create function for vector similarity search
+create or replace function search_expenses(
+  query_embedding vector(1536),
+  similarity_threshold float,
+  match_count int
+)
+returns table (
+  id uuid,
+  description text,
+  amount decimal,
+  date timestamp with time zone,
+  merchant text,
+  category_name text,
+  similarity float
+)
+language plpgsql
+as $$
+begin
+  return query
+  select
+    e.id,
+    e.description,
+    e.amount,
+    e.date,
+    e.merchant,
+    c.name as category_name,
+    1 - (e.embedding <=> query_embedding) as similarity
+  from expenses e
+  join categories c on c.id = e.category_id
+  where 1 - (e.embedding <=> query_embedding) > similarity_threshold
+  order by similarity desc
+  limit match_count;
+end;
+$$;
 ```
 
 ## Usage
 
 Start the application:
 
-```bash
-bun run start
-```
-
-or
-
-```bash
-npm run start
-```
-
-### Available Commands
-
-- `help`: Show available commands
-- `status`: View current proposals in queue
-- `review`: Review and act on pending proposals
-- `debug`: Show detailed system state
-- `exit`: Exit the application
-
-### Example Interactions
-
-```bash
-> I spent $25 on lunch today
-> Created 1 new proposal(s)
-> Pending actions available. Type 'review' to see them.
-> review
-> Proposed actions:
-> add_expense (90% confident)
-> Parameters: {"amount": 25, "description": "lunch", "date": "2024-03-14"}
-> Context: User reported spending on a meal
-> Options:
-> Numbers (comma-separated) to accept proposals
-> "e NUMBER" to edit a proposal
-> "n" to reject all
-> "d" to done/proceed
 ```

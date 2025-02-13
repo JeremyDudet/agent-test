@@ -178,3 +178,53 @@ export interface TavilySearchAPIResponse {
   results: TavilySearchResult[];
   query: string;
 }
+
+export interface Expense {
+  id: string;
+  userId: string;
+  amount: number;
+  date: string;
+  category: string;
+  item: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExpenseCreateDTO {
+  amount: number;
+  date: string;
+  category: string;
+  item: string;
+  description?: string;
+}
+
+export interface ExpenseUpdateDTO extends Partial<ExpenseCreateDTO> {
+  id: string;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TranscriptionData {
+  text: string;
+  userId: string;
+  timestamp: string;
+}
+
+export interface ApiResponse<T> {
+  data?: T;
+  error?: {
+    message: string;
+    code: string;
+  };
+  meta?: {
+    total?: number;
+    page?: number;
+    limit?: number;
+  };
+}
