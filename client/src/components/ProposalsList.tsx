@@ -13,16 +13,16 @@ interface ProposalsListProps {
 }
 
 export function ProposalsList({ proposals, onApprove, onReject, onEdit, categories }: ProposalsListProps) {
-  const getStatusColor = (status: string) => {
+  const getStatusVariant = (status: string) => {
     switch (status) {
       case 'pending_review':
-        return 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20';
+        return 'secondary';
       case 'confirmed':
-        return 'bg-green-500/10 text-green-500 border-green-500/20';
+        return 'default';
       case 'rejected':
-        return 'bg-red-500/10 text-red-500 border-red-500/20';
+        return 'destructive';
       default:
-        return '';
+        return 'outline';
     }
   };
 
@@ -77,8 +77,7 @@ export function ProposalsList({ proposals, onApprove, onReject, onEdit, categori
                       <span>{formatDate(proposal.date)}</span>
                     </div>
                     <Badge 
-                      variant="outline" 
-                      className={getStatusColor(proposal.status || 'pending_review')}
+                      variant={getStatusVariant(proposal.status || 'pending_review')}
                     >
                       {proposal.status || 'Pending Review'}
                     </Badge>
