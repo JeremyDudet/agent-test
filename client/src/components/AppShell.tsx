@@ -26,6 +26,7 @@ import {
   Menu,
   X
 } from 'lucide-react';
+import { ThemeToggle } from './ThemeToggle';
 
 const SidebarLink = ({ 
   to, 
@@ -184,15 +185,18 @@ const AppShell: React.FC = () => {
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
       
       <main className="flex-1">
-        <div className="flex h-[73px] items-center gap-4 border-b bg-background px-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="lg:hidden"
-            onClick={() => setIsSidebarOpen(true)}
-          >
-            <Menu className="h-6 w-6" />
-          </Button>
+        <div className="flex h-[73px] items-center justify-between gap-4 border-b bg-background px-4">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="lg:hidden"
+              onClick={() => setIsSidebarOpen(true)}
+            >
+              <Menu className="h-6 w-6" />
+            </Button>
+          </div>
+          <ThemeToggle />
         </div>
         <div className="flex-1 space-y-4 p-8 pt-6">
           <Outlet />

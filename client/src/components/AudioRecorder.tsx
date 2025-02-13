@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Check, X, Edit, Mic, ChevronDown, ChevronRight, Brain } from 'lucide-react';
+import { Check, X, Edit, Mic, ChevronDown, ChevronRight, Brain, MessageSquare } from 'lucide-react';
 import type {
   Proposal,
   SemanticContext,
@@ -24,6 +24,16 @@ import { DialogTrigger } from "@/components/ui/dialog";
 import { mergePreRecordingBufferWithRecordedAudio } from '../services/audioMerging';
 import { cn } from "@/lib/utils";
 import { EditExpenseDialog } from './EditExpenseDialog';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerDescription,
+  DrawerTrigger,
+  DrawerFooter,
+  DrawerClose,
+} from "@/components/ui/drawer";
 
 interface VADInstance {
   destroy: () => void;
@@ -147,74 +157,91 @@ interface TranscriptionEntry {
   timestamp: string;
 }
 
-function CollapsibleTranscription({ 
+function DrawerTranscription({ 
   entries,
   isProcessing 
 }: { 
   entries: TranscriptionEntry[];
   isProcessing: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(true);
+  const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <Card>
-      <CardHeader>
-        <div 
-          className="flex items-center justify-between cursor-pointer"
-          onClick={() => setIsOpen(!isOpen)}
+    <Drawer open={isOpen} onOpenChange={setIsOpen}>
+      <DrawerTrigger asChild>
+        <Button 
+          variant="outline" 
+          className="fixed bottom-4 right-4 shadow-lg z-50 gap-2"
         >
-          <div className="space-y-1">
-            <CardTitle className="flex items-center gap-2">
-              Conversation History
-              <Button 
-                variant="ghost" 
-                size="sm"
-                className="h-6 w-6 p-0"
-              >
-                {isOpen ? (
-                  <ChevronDown className="h-4 w-4" />
-                ) : (
-                  <ChevronRight className="h-4 w-4" />
-                )}
-              </Button>
-            </CardTitle>
-            <CardDescription>Live transcription and AI analysis</CardDescription>
-          </div>
-          <ThinkingIndicator isProcessing={isProcessing} />
-        </div>
-      </CardHeader>
-      {isOpen && (
-        <CardContent>
-          <div className="space-y-4">
-            {entries.map((entry, i) => (
-              <div
-                key={i}
-                className={cn(
-                  "rounded-lg p-3 text-sm",
-                  entry.type === 'transcription' 
-                    ? "bg-muted/50 text-muted-foreground"
-                    : "bg-primary/10 text-primary-foreground"
-                )}
-              >
-                <div className="flex items-start gap-2">
-                  {entry.type === 'transcription' ? (
-                    <Mic className="h-4 w-4 mt-1 flex-shrink-0" />
-                  ) : (
-                    <Brain className="h-4 w-4 mt-1 flex-shrink-0" />
+          <MessageSquare className="h-4 w-4" />
+          Conversation History
+          {isProcessing && (
+            <div className="ml-2">
+              <ThinkingIndicator isProcessing={isProcessing} />
+            </div>
+          )}
+        </Button>
+      </DrawerTrigger>
+      <DrawerContent>
+        <div className="mx-auto w-full max-w-2xl">
+          <DrawerHeader className="border-b border-border">
+            <DrawerTitle className="text-foreground">Conversation History</DrawerTitle>
+            <DrawerDescription className="text-muted-foreground">Live transcription and AI analysis</DrawerDescription>
+          </DrawerHeader>
+          <div className="p-4 h-[50vh] overflow-y-auto">
+            <div className="space-y-4">
+              {entries.map((entry, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "flex",
+                    entry.type === 'transcription' ? "justify-end" : "justify-start"
                   )}
-                  <div className="flex-1">
-                    <div className="text-xs text-muted-foreground mb-1">
-                      {entry.timestamp}
+                >
+                  <div
+                    className={cn(
+                      "flex max-w-[80%] items-start gap-2 rounded-lg px-4 py-2",
+                      entry.type === 'transcription' 
+                        ? "bg-primary text-primary-foreground dark:text-primary-foreground" 
+                        : "bg-muted text-muted-foreground dark:bg-muted"
+                    )}
+                  >
+                    {entry.type === 'transcription' ? (
+                      <Mic className="mt-1 h-4 w-4 flex-shrink-0" />
+                    ) : (
+                      <Brain className="mt-1 h-4 w-4 flex-shrink-0" />
+                    )}
+                    <div className="flex-1 space-y-1">
+                      <p className={cn(
+                        "text-sm",
+                        entry.type === 'transcription' 
+                          ? "text-primary-foreground dark:text-primary-foreground"
+                          : "text-foreground dark:text-foreground"
+                      )}>
+                        {entry.content}
+                      </p>
+                      <p className={cn(
+                        "text-xs",
+                        entry.type === 'transcription' 
+                          ? "text-primary-foreground/70 dark:text-primary-foreground/70"
+                          : "text-muted-foreground dark:text-muted-foreground"
+                      )}>
+                        {entry.timestamp}
+                      </p>
                     </div>
-                    {entry.content}
                   </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </CardContent>
-      )}
-    </Card>
+          <DrawerFooter className="border-t border-border">
+            <DrawerClose asChild>
+              <Button variant="outline" className="w-full">Close</Button>
+            </DrawerClose>
+          </DrawerFooter>
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }
 
@@ -886,7 +913,7 @@ export function AudioRecorder({ isRecording: externalIsRecording }: AudioRecorde
       </Card>
 
       {conversationEntries.length > 0 && (
-        <CollapsibleTranscription
+        <DrawerTranscription
           entries={conversationEntries}
           isProcessing={isProcessing}
         />

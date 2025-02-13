@@ -7,8 +7,10 @@ import {
   Message, 
   ExpenseCategory,
   AudioChunk,
-  SemanticContext 
+  SemanticContext,
+  Conversation
 } from '../types';
+import { ConversationService } from '../services/ConversationService';
 
 interface User {
   id: string;
@@ -82,12 +84,21 @@ interface SystemSlice {
   setError: (error: string | null) => void;
 }
 
-type Store = SystemSlice & AudioSlice & TranscriptionSlice & ProposalSlice & MessageSlice & CategorySlice & AuthSlice;
+interface ConversationSlice {
+  currentConversationId: string | null;
+  conversations: Conversation[];
+  setCurrentConversation: (id: string | null) => void;
+  loadConversations: () => Promise<void>;
+  startNewConversation: () => Promise<void>;
+  archiveCurrentConversation: () => Promise<void>;
+}
+
+type Store = SystemSlice & AudioSlice & TranscriptionSlice & ProposalSlice & MessageSlice & CategorySlice & AuthSlice & ConversationSlice;
 
 const useStore = create<Store>()(
   devtools(
     persist(
-      (set) => ({
+      (set, get) => ({
         // Auth State
         user: null,
         isAuthenticated: false,
@@ -160,34 +171,56 @@ const useStore = create<Store>()(
           processedMessages: [],
           newMessages: [],
         },
-        addProcessedMessage: (message) =>
-          set((state) => {
-            // Validate message content
-            const content = message.content.trim();
-            if (content.length <= 1 || /^[.\s]*$/.test(content)) {
-              return state; // Return unchanged state for invalid messages
+        addProcessedMessage: async (message) => {
+          const { currentConversationId } = get();
+          // Validate message content
+          const content = message.content.trim();
+          if (content.length <= 1 || /^[.\s]*$/.test(content)) {
+            return; // Return for invalid messages
+          }
+
+          if (currentConversationId) {
+            const savedMessage = await ConversationService.addMessage(currentConversationId, {
+              role: message.role,
+              content: message.content,
+              sequenceNumber: 0, // The service will calculate the correct sequence number
+            });
+
+            if (savedMessage) {
+              set((state) => ({
+                messageWindow: {
+                  ...state.messageWindow,
+                  processedMessages: [...state.messageWindow.processedMessages, message],
+                },
+              }));
             }
-            return {
-              messageWindow: {
-                ...state.messageWindow,
-                processedMessages: [...state.messageWindow.processedMessages, message],
-              },
-            };
-          }),
-        addNewMessage: (message) =>
-          set((state) => {
-            // Validate message content
-            const content = message.content.trim();
-            if (content.length <= 1 || /^[.\s]*$/.test(content)) {
-              return state; // Return unchanged state for invalid messages
+          }
+        },
+        addNewMessage: async (message) => {
+          const { currentConversationId } = get();
+          // Validate message content
+          const content = message.content.trim();
+          if (content.length <= 1 || /^[.\s]*$/.test(content)) {
+            return; // Return for invalid messages
+          }
+
+          if (currentConversationId) {
+            const savedMessage = await ConversationService.addMessage(currentConversationId, {
+              role: message.role,
+              content: message.content,
+              sequenceNumber: 0, // The service will calculate the correct sequence number
+            });
+
+            if (savedMessage) {
+              set((state) => ({
+                messageWindow: {
+                  ...state.messageWindow,
+                  newMessages: [...state.messageWindow.newMessages, message],
+                },
+              }));
             }
-            return {
-              messageWindow: {
-                ...state.messageWindow,
-                newMessages: [...state.messageWindow.newMessages, message],
-              },
-            };
-          }),
+          }
+        },
         clearNewMessages: () =>
           set((state) => ({
             messageWindow: {
@@ -216,14 +249,52 @@ const useStore = create<Store>()(
               (c) => c.id !== categoryId
             ),
           })),
+
+        // Conversation State
+        currentConversationId: null,
+        conversations: [],
+        setCurrentConversation: (id) => set({ currentConversationId: id }),
+        loadConversations: async () => {
+          const conversations = await ConversationService.getConversations();
+          set({ conversations });
+        },
+        startNewConversation: async () => {
+          const conversation = await ConversationService.createConversation();
+          if (conversation) {
+            set((state) => ({
+              conversations: [conversation, ...state.conversations],
+              currentConversationId: conversation.id,
+              messageWindow: {
+                processedMessages: [],
+                newMessages: [],
+              },
+            }));
+          }
+        },
+        archiveCurrentConversation: async () => {
+          const { currentConversationId } = get();
+          if (currentConversationId) {
+            const success = await ConversationService.archiveConversation(currentConversationId);
+            if (success) {
+              set((state) => ({
+                conversations: state.conversations.filter(c => c.id !== currentConversationId),
+                currentConversationId: null,
+                messageWindow: {
+                  processedMessages: [],
+                  newMessages: [],
+                },
+              }));
+            }
+          }
+        },
       }),
       {
         name: 'expense-tracker-store',
         partialize: (state) => ({
-          // Only persist auth-related state
           user: state.user,
           authToken: state.authToken,
           isAuthenticated: state.isAuthenticated,
+          currentConversationId: state.currentConversationId,
         }),
       }
     )
